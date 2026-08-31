@@ -1,15 +1,15 @@
 import { useAuthStore } from '@/stores/useAuthStore';
 
 export const useAuth = () => {
-  const { 
-    user, 
-    loading, 
-    error, 
+  const {
+    user,
+    loading,
+    error,
     initialized,
-    login, 
-    register, 
-    loginWithGoogle, 
-    logout 
+    login,
+    register,
+    loginWithGoogle,
+    logout,
   } = useAuthStore();
 
   return {

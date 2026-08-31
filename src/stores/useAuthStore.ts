@@ -1,13 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { User, UserRole } from '@/types';
-
-interface RegisterData {
-  username: string;
-  email: string;
-  password: string;
-  role: UserRole;
-}
+import type { User } from '@/types';
 
 interface AuthState {
   user: User | null;
@@ -15,21 +8,40 @@ interface AuthState {
   initialized: boolean;
   error: string | null;
 
-  login: (email: string, password: string) => Promise<void>;
-  register: (data: RegisterData) => Promise<void>;
+  login: (
+    email: string,
+    password: string
+  ) => Promise<void>;
+
+  register: (data: {
+    username: string;
+    email: string;
+    password: string;
+  }) => Promise<void>;
+
   loginWithGoogle: () => Promise<void>;
-  logout: () => void;
+
+  logout: () => Promise<void>;
+
   initAuth: () => void;
 }
 
-const HAS_FIREBASE = !!import.meta.env.VITE_FIREBASE_API_KEY;
+/*
+ * Verifica se o Firebase está configurado
+ * através da variável do .env
+ */
+const HAS_FIREBASE =
+  !!import.meta.env.VITE_FIREBASE_API_KEY;
 
+/*
+ * Usuário utilizado quando o projeto está
+ * funcionando em modo local.
+ */
 const MOCK_USER: User = {
   id: 'demo-user-001',
   username: 'DemoCoder',
   email: 'demo@nexus.io',
   avatarUrl: '',
-  role: 'student',
   level: 1,
   xp: 0,
   currentStreak: 0,
@@ -39,55 +51,81 @@ const MOCK_USER: User = {
   joinedAt: new Date().toISOString(),
 };
 
+/*
+ * Traduz os códigos de erro do Firebase
+ * para mensagens em português.
+ */
 function traduzErro(code?: string): string {
   const erros: Record<string, string> = {
-    'auth/email-already-in-use': 'Este email já está cadastrado',
-    'auth/invalid-email': 'Email inválido',
-    'auth/weak-password': 'Senha muito fraca',
-    'auth/user-not-found': 'Usuário não encontrado',
-    'auth/wrong-password': 'Senha incorreta',
-    'auth/invalid-credential': 'Email ou senha incorretos',
-    'auth/popup-closed-by-user': 'Login cancelado',
+    'auth/email-already-in-use':
+      'Este email já está cadastrado.',
+
+    'auth/invalid-email':
+      'Email inválido.',
+
+    'auth/weak-password':
+      'A senha precisa ter pelo menos 6 caracteres.',
+
+    'auth/user-not-found':
+      'Usuário não encontrado.',
+
+    'auth/wrong-password':
+      'Senha incorreta.',
+
+    'auth/invalid-credential':
+      'Email ou senha incorretos.',
+
+    'auth/popup-closed-by-user':
+      'Login cancelado.',
+
+    'auth/network-request-failed':
+      'Erro de conexão com o Firebase.',
+
+    'auth/too-many-requests':
+      'Muitas tentativas. Tente novamente mais tarde.',
+
+    'auth/user-disabled':
+      'Esta conta foi desativada.',
+
+    'PERMISSION_DENIED':
+      'Permissão negada no Realtime Database. Verifique as Rules.',
+
+    'permission-denied':
+      'Permissão negada no Realtime Database. Verifique as Rules.',
   };
 
-  return erros[code || ''] || 'Erro ao autenticar';
+  return (
+    erros[code || ''] ||
+    'Erro ao autenticar. Tente novamente.'
+  );
 }
 
-function criarUsuario(
-  id: string,
-  username: string,
-  email: string,
-  role: UserRole,
-  avatarUrl = ''
-): User {
-  return {
-    id,
-    username,
-    email,
-    avatarUrl,
-    role,
-    level: 1,
-    xp: 0,
-    currentStreak: 0,
-    longestStreak: 0,
-    className: 'Initiate',
-    title: 'Iniciante',
-    joinedAt: new Date().toISOString(),
-  };
-}
-
+/*
+ * Store principal de autenticação.
+ */
 export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
       user: null,
+
       loading: false,
+
       initialized: false,
+
       error: null,
 
+      /*
+       * Inicializa o estado de autenticação.
+       */
       initAuth: () => {
-        set({ initialized: true });
+        set({
+          initialized: true,
+        });
       },
 
+      /*
+       * LOGIN COM EMAIL E SENHA
+       */
       login: async (email, password) => {
         set({
           loading: true,
@@ -95,76 +133,143 @@ export const useAuthStore = create<AuthState>()(
         });
 
         try {
+          /*
+           * ==========================
+           * FIREBASE
+           * ==========================
+           */
           if (HAS_FIREBASE) {
             const {
               signInWithEmailAndPassword,
             } = await import('firebase/auth');
 
             const {
-              doc,
-              getDoc,
-              setDoc,
-              serverTimestamp,
-            } = await import('firebase/firestore');
+              ref,
+              get,
+              set: setDatabase,
+            } = await import('firebase/database');
 
-            const { auth, db } = await import('@/lib/firebase');
-
-            const result = await signInWithEmailAndPassword(
+            const {
               auth,
-              email,
-              password
+              db,
+            } = await import('@/lib/firebase');
+
+            /*
+             * O ! informa ao TypeScript que,
+             * nesse ponto, o Firebase deve existir.
+             */
+            const result =
+              await signInWithEmailAndPassword(
+                auth!,
+                email.trim(),
+                password
+              );
+
+            /*
+             * Caminho do usuário no Realtime Database:
+             *
+             * users/UID
+             */
+            const userRef = ref(
+              db!,
+              'users/' + result.user.uid
             );
 
-            const userRef = doc(db, 'users', result.user.uid);
-            const userSnap = await getDoc(userRef);
+            const userSnap = await get(
+              userRef
+            );
 
             let user: User;
 
+            /*
+             * Se o usuário já possui dados no
+             * Realtime Database, carregamos eles.
+             */
             if (userSnap.exists()) {
-              const data = userSnap.data();
-
-              user = {
-                ...criarUsuario(
-                  result.user.uid,
-                  data.username || email.split('@')[0],
-                  data.email || email,
-                  data.role || 'student',
-                  data.avatarUrl || ''
-                ),
-                ...data,
-              } as User;
+              user =
+                userSnap.val() as User;
             } else {
-              user = criarUsuario(
-                result.user.uid,
-                email.split('@')[0],
-                email,
-                'student'
-              );
+              /*
+               * Caso a conta exista no Authentication,
+               * mas ainda não exista no Database,
+               * criamos os dados automaticamente.
+               */
+              user = {
+                id: result.user.uid,
 
-              await setDoc(userRef, {
-                ...user,
-                createdAt: serverTimestamp(),
-              });
+                username:
+                  result.user.displayName ||
+                  email.split('@')[0],
+
+                email:
+                  result.user.email ||
+                  email,
+
+                avatarUrl:
+                  result.user.photoURL || '',
+
+                level: 1,
+
+                xp: 0,
+
+                currentStreak: 0,
+
+                longestStreak: 0,
+
+                className: 'Initiate',
+
+                title: 'Iniciante',
+
+                joinedAt:
+                  new Date().toISOString(),
+              };
+
+              await setDatabase(
+                userRef,
+                user
+              );
             }
 
             set({
               user,
               loading: false,
+              initialized: true,
+              error: null,
             });
           } else {
-            await new Promise((resolve) => setTimeout(resolve, 500));
+            /*
+             * ==========================
+             * MODO LOCAL
+             * ==========================
+             */
+            await new Promise((resolve) =>
+              setTimeout(resolve, 500)
+            );
 
             set({
               user: {
                 ...MOCK_USER,
-                email,
+                email: email.trim(),
               },
+
               loading: false,
+
+              initialized: true,
+
+              error: null,
             });
           }
         } catch (err: any) {
+          console.error(
+            '❌ Erro no login:',
+            err
+          );
+
+          const message =
+            traduzErro(err?.code);
+
           set({
-            error: traduzErro(err?.code),
+            error: message,
             loading: false,
           });
 
@@ -172,6 +277,11 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
+      /*
+       * ==========================
+       * REGISTRO
+       * ==========================
+       */
       register: async (data) => {
         set({
           loading: true,
@@ -179,64 +289,160 @@ export const useAuthStore = create<AuthState>()(
         });
 
         try {
+          /*
+           * ==========================
+           * FIREBASE
+           * ==========================
+           */
           if (HAS_FIREBASE) {
             const {
               createUserWithEmailAndPassword,
               updateProfile,
-            } = await import('firebase/auth');
+            } = await import(
+              'firebase/auth'
+            );
 
             const {
-              doc,
-              setDoc,
-              serverTimestamp,
-            } = await import('firebase/firestore');
+              ref,
+              set: setDatabase,
+            } = await import(
+              'firebase/database'
+            );
 
-            const { auth, db } = await import('@/lib/firebase');
-
-            const result = await createUserWithEmailAndPassword(
+            const {
               auth,
-              data.email,
-              data.password
+              db,
+            } = await import('@/lib/firebase');
+
+            /*
+             * Cria a conta no Firebase Authentication.
+             */
+            const result =
+              await createUserWithEmailAndPassword(
+                auth!,
+                data.email.trim(),
+                data.password
+              );
+
+            /*
+             * Define o nome do usuário
+             * no Firebase Authentication.
+             */
+            await updateProfile(
+              result.user,
+              {
+                displayName:
+                  data.username.trim(),
+              }
             );
 
-            await updateProfile(result.user, {
-              displayName: data.username,
-            });
+            /*
+             * Dados do usuário que serão
+             * armazenados no Realtime Database.
+             */
+            const user: User = {
+              id: result.user.uid,
 
-            const user = criarUsuario(
-              result.user.uid,
-              data.username,
-              data.email,
-              data.role
+              username:
+                data.username.trim(),
+
+              email:
+                data.email.trim(),
+
+              avatarUrl: '',
+
+              level: 1,
+
+              xp: 0,
+
+              currentStreak: 0,
+
+              longestStreak: 0,
+
+              className: 'Initiate',
+
+              title: 'Iniciante',
+
+              joinedAt:
+                new Date().toISOString(),
+            };
+
+            /*
+             * Caminho onde o usuário será salvo:
+             *
+             * users/UID
+             */
+            const userRef = ref(
+              db!,
+              'users/' + result.user.uid
             );
 
-            await setDoc(doc(db, 'users', result.user.uid), {
-              ...user,
-              createdAt: serverTimestamp(),
-            });
+            /*
+             * Salva o usuário no
+             * Firebase Realtime Database.
+             */
+            await setDatabase(
+              userRef,
+              user
+            );
+
+            console.log(
+              '✅ Usuário criado no Firebase!'
+            );
+
+            console.log(
+              '📁 Caminho: users/' +
+                result.user.uid
+            );
 
             set({
               user,
+
               loading: false,
+
+              initialized: true,
+
+              error: null,
             });
           } else {
-            await new Promise((resolve) => setTimeout(resolve, 500));
-
-            const user = criarUsuario(
-              `local-${Date.now()}`,
-              data.username,
-              data.email,
-              data.role
+            /*
+             * ==========================
+             * MODO LOCAL
+             * ==========================
+             */
+            await new Promise((resolve) =>
+              setTimeout(resolve, 500)
             );
 
             set({
-              user,
+              user: {
+                ...MOCK_USER,
+
+                username:
+                  data.username,
+
+                email:
+                  data.email,
+              },
+
               loading: false,
+
+              initialized: true,
+
+              error: null,
             });
           }
         } catch (err: any) {
+          console.error(
+            '❌ Erro ao criar conta:',
+            err
+          );
+
+          const message =
+            traduzErro(err?.code);
+
           set({
-            error: traduzErro(err?.code),
+            error: message,
             loading: false,
           });
 
@@ -244,6 +450,11 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
+      /*
+       * ==========================
+       * LOGIN COM GOOGLE
+       * ==========================
+       */
       loginWithGoogle: async () => {
         set({
           loading: true,
@@ -251,82 +462,150 @@ export const useAuthStore = create<AuthState>()(
         });
 
         try {
+          /*
+           * ==========================
+           * FIREBASE
+           * ==========================
+           */
           if (HAS_FIREBASE) {
             const {
               signInWithPopup,
               GoogleAuthProvider,
-            } = await import('firebase/auth');
-
-            const {
-              doc,
-              getDoc,
-              setDoc,
-              serverTimestamp,
-            } = await import('firebase/firestore');
-
-            const { auth, db } = await import('@/lib/firebase');
-
-            const provider = new GoogleAuthProvider();
-
-            const result = await signInWithPopup(
-              auth,
-              provider
+            } = await import(
+              'firebase/auth'
             );
 
-            const userRef = doc(db, 'users', result.user.uid);
-            const userSnap = await getDoc(userRef);
+            const {
+              ref,
+              get,
+              set: setDatabase,
+            } = await import(
+              'firebase/database'
+            );
+
+            const {
+              auth,
+              db,
+            } = await import('@/lib/firebase');
+
+            const provider =
+              new GoogleAuthProvider();
+
+            /*
+             * Abre o login do Google.
+             */
+            const result =
+              await signInWithPopup(
+                auth!,
+                provider
+              );
+
+            /*
+             * Procura os dados do usuário
+             * no Realtime Database.
+             */
+            const userRef = ref(
+              db!,
+              'users/' + result.user.uid
+            );
+
+            const userSnap = await get(
+              userRef
+            );
 
             let user: User;
 
+            /*
+             * Usuário já existe no Database.
+             */
             if (userSnap.exists()) {
-              const data = userSnap.data();
-
-              user = {
-                ...criarUsuario(
-                  result.user.uid,
-                  data.username ||
-                    result.user.displayName ||
-                    'Coder',
-                  data.email ||
-                    result.user.email ||
-                    '',
-                  data.role || 'student',
-                  data.avatarUrl ||
-                    result.user.photoURL ||
-                    ''
-                ),
-                ...data,
-              } as User;
+              user =
+                userSnap.val() as User;
             } else {
-              user = criarUsuario(
-                result.user.uid,
-                result.user.displayName || 'Coder',
-                result.user.email || '',
-                'student',
-                result.user.photoURL || ''
+              /*
+               * Primeiro login com Google.
+               *
+               * Criamos o usuário no Database.
+               */
+              user = {
+                id: result.user.uid,
+
+                username:
+                  result.user.displayName ||
+                  'Coder',
+
+                email:
+                  result.user.email || '',
+
+                avatarUrl:
+                  result.user.photoURL || '',
+
+                level: 1,
+
+                xp: 0,
+
+                currentStreak: 0,
+
+                longestStreak: 0,
+
+                className: 'Initiate',
+
+                title: 'Iniciante',
+
+                joinedAt:
+                  new Date().toISOString(),
+              };
+
+              await setDatabase(
+                userRef,
+                user
               );
 
-              await setDoc(userRef, {
-                ...user,
-                createdAt: serverTimestamp(),
-              });
+              console.log(
+                '✅ Usuário Google salvo no Firebase!'
+              );
             }
 
             set({
               user,
+
               loading: false,
+
+              initialized: true,
+
+              error: null,
             });
           } else {
-            await new Promise((resolve) => setTimeout(resolve, 500));
+            /*
+             * ==========================
+             * MODO LOCAL
+             * ==========================
+             */
+            await new Promise((resolve) =>
+              setTimeout(resolve, 500)
+            );
 
             set({
               user: MOCK_USER,
+
               loading: false,
+
+              initialized: true,
+
+              error: null,
             });
           }
         } catch (err: any) {
+          console.error(
+            '❌ Erro no login com Google:',
+            err
+          );
+
+          const message =
+            traduzErro(err?.code);
+
           set({
-            error: traduzErro(err?.code),
+            error: message,
             loading: false,
           });
 
@@ -334,13 +613,58 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      logout: () => {
-        set({
-          user: null,
-          error: null,
-        });
+      /*
+       * ==========================
+       * LOGOUT
+       * ==========================
+       */
+      logout: async () => {
+        try {
+          if (HAS_FIREBASE) {
+            const {
+              signOut,
+            } = await import(
+              'firebase/auth'
+            );
+
+            const {
+              auth,
+            } = await import(
+              '@/lib/firebase'
+            );
+
+            await signOut(auth!);
+          }
+
+          set({
+            user: null,
+            error: null,
+          });
+
+          console.log(
+            '✅ Logout realizado.'
+          );
+        } catch (err) {
+          console.error(
+            '❌ Erro ao fazer logout:',
+            err
+          );
+
+          /*
+           * Mesmo se houver erro no Firebase,
+           * removemos o usuário localmente.
+           */
+          set({
+            user: null,
+            error: null,
+          });
+        }
       },
     }),
+
+    /*
+     * Persiste o usuário no navegador.
+     */
     {
       name: 'codequest-auth',
     }
