@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 
 import { AppShell } from '@/components/layout/AppShell';
 import { ProtectedRoute } from '@/components/layout/ProtectedRoute';
+import { RoleRoute } from '@/components/layout/RoleRoute';
 
 import { Landing } from '@/pages/Landing/Landing';
 import { Login } from '@/pages/Auth/Login';
@@ -15,16 +16,26 @@ import { Achievements } from '@/pages/Achievements/Achievements';
 import { Lesson } from '@/pages/Lesson/Lesson';
 import { Profile } from '@/pages/Profile/Profile';
 
+import { TeacherDashboard } from '@/pages/Teacher/TeacherDashboard';
+import { AdminDashboard } from '@/pages/Admin/AdminDashboard';
+
 function App() {
-  const [notification, setNotification] = useState({
-    visible: false,
-    type: 'success' as 'success' | 'warning' | 'error',
-    title: '',
-    message: '',
-  });
+  const [notification, setNotification] =
+    useState({
+      visible: false,
+      type: 'success' as
+        | 'success'
+        | 'warning'
+        | 'error',
+      title: '',
+      message: '',
+    });
 
   const showNotification = (
-    type: 'success' | 'warning' | 'error',
+    type:
+      | 'success'
+      | 'warning'
+      | 'error',
     title: string,
     message: string
   ) => {
@@ -56,17 +67,17 @@ function App() {
         showNotification(
           'warning',
           '💾 Modo Local',
-          'Firebase não configurado. Os dados estão sendo usados localmente.'
+          'Firebase não configurado. Os dados serão salvos no navegador.'
         );
 
         return;
       }
 
       try {
-        const firemodule =
+        const firebase =
           await import('@/lib/firebase');
 
-        if (firemodule.firebaseConnected) {
+        if (firebase.firebaseConnected) {
           showNotification(
             'success',
             '☁️ Firebase Conectado!',
@@ -75,15 +86,15 @@ function App() {
         } else {
           showNotification(
             'warning',
-            '⏳ Firebase Carregando...',
-            'Tentando conectar ao servidor...'
+            '⏳ Firebase',
+            'Firebase ainda não está conectado.'
           );
         }
       } catch {
         showNotification(
           'error',
           '❌ Erro Firebase',
-          'Verifique a configuração do Firebase.'
+          'Verifique o arquivo .env.'
         );
       }
     };
@@ -108,8 +119,8 @@ function App() {
       error: '❌',
     };
 
-    const color = colorMap[notification.type];
-    const icon = iconMap[notification.type];
+    const color =
+      colorMap[notification.type];
 
     return (
       <div
@@ -134,11 +145,19 @@ function App() {
             gap: '12px',
           }}
         >
-          <div style={{ fontSize: '28px' }}>
-            {icon}
+          <div
+            style={{
+              fontSize: '28px',
+            }}
+          >
+            {iconMap[notification.type]}
           </div>
 
-          <div style={{ flex: 1 }}>
+          <div
+            style={{
+              flex: 1,
+            }}
+          >
             <h3
               style={{
                 color,
@@ -191,8 +210,6 @@ function App() {
       <Notification />
 
       <Routes>
-        {/* Páginas públicas */}
-
         <Route
           path="/"
           element={<Landing />}
@@ -208,7 +225,27 @@ function App() {
           element={<Register />}
         />
 
-        {/* Área protegida */}
+        <Route
+          path="/teacher"
+          element={
+            <ProtectedRoute>
+              <RoleRoute allowedRoles={['teacher']}>
+                <TeacherDashboard />
+              </RoleRoute>
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute>
+              <RoleRoute allowedRoles={['admin']}>
+                <AdminDashboard />
+              </RoleRoute>
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           element={
@@ -261,8 +298,6 @@ function App() {
             }
           />
         </Route>
-
-        {/* Rota inexistente */}
 
         <Route
           path="*"

@@ -1,5 +1,9 @@
 import { useState, useEffect } from 'react';
-import { ref, onValue, set } from 'firebase/database';
+import {
+  doc,
+  onSnapshot,
+  setDoc,
+} from 'firebase/firestore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { db } from '@/lib/firebase';
 
@@ -53,35 +57,52 @@ export function useProgress() {
     setProgress(getStoredProgress());
   }, [user?.id]);
 
-  // Conecta ao Realtime Database
+  // Conecta ao Firestore
   useEffect(() => {
     if (!user || !db) {
       return;
     }
 
-    console.log('☁️ Conectando ao Realtime Database...');
+    console.log('☁️ Conectando ao Firestore...');
 
-    const progressRef = ref(
+    const progressRef = doc(
       db,
-      `users/${user.id}/progress`
+      'users',
+      user.id,
+      'progress',
+      'main'
     );
 
-    const unsubscribe = onValue(
+    const unsubscribe = onSnapshot(
       progressRef,
       (snapshot) => {
         if (snapshot.exists()) {
-          const data = snapshot.val() as ProgressData;
+          const data = snapshot.data();
 
           const normalizedData: ProgressData = {
-            completedLessons: data.completedLessons || [],
-            xp: data.xp || 0,
-            downloadedLessons: data.downloadedLessons || [],
+            completedLessons:
+              Array.isArray(data.completedLessons)
+                ? data.completedLessons
+                : [],
+
+            xp:
+              typeof data.xp === 'number'
+                ? data.xp
+                : 0,
+
+            downloadedLessons:
+              Array.isArray(data.downloadedLessons)
+                ? data.downloadedLessons
+                : [],
+
             lastUpdated:
-              data.lastUpdated || new Date().toISOString(),
+              typeof data.lastUpdated === 'string'
+                ? data.lastUpdated
+                : new Date().toISOString(),
           };
 
           console.log(
-            '☁️ Dados recebidos do Realtime Database:',
+            '☁️ Dados recebidos do Firestore:',
             normalizedData
           );
 
@@ -99,7 +120,7 @@ export function useProgress() {
       },
       (error) => {
         console.error(
-          '❌ Erro ao ler Realtime Database:',
+          '❌ Erro ao ler Firestore:',
           error.message
         );
       }
@@ -132,7 +153,7 @@ export function useProgress() {
       );
     }
 
-    // Realtime Database
+    // Firebase
     if (!user) {
       console.log(
         '⚠️ Usuário não autenticado. Não será salvo na nuvem.'
@@ -142,29 +163,35 @@ export function useProgress() {
 
     if (!db) {
       console.log(
-        '⚠️ Realtime Database não está disponível.'
+        '⚠️ Firestore não está disponível.'
       );
       return;
     }
 
     try {
       console.log(
-        '☁️ Salvando no Realtime Database...'
+        '☁️ Salvando no Firestore...'
       );
 
-      const progressRef = ref(
+      const progressRef = doc(
         db,
-        `users/${user.id}/progress`
+        'users',
+        user.id,
+        'progress',
+        'main'
       );
 
-      await set(progressRef, newData);
+      await setDoc(
+        progressRef,
+        newData
+      );
 
       console.log(
-        '☁️✅ Progresso salvo no Realtime Database!'
+        '☁️✅ Progresso salvo no Firestore!'
       );
     } catch (err: any) {
       console.error(
-        '❌ Erro ao salvar no Realtime Database:',
+        '❌ Erro ao salvar no Firestore:',
         err?.message || err
       );
     }
@@ -180,11 +207,14 @@ export function useProgress() {
 
     await save({
       ...progress,
+
       completedLessons: [
         ...progress.completedLessons,
         lessonId,
       ],
+
       xp: progress.xp + xpReward,
+
       lastUpdated: new Date().toISOString(),
     });
   };
@@ -199,14 +229,17 @@ export function useProgress() {
 
     await save({
       ...progress,
+
       completedLessons:
         progress.completedLessons.filter(
           (id) => id !== lessonId
         ),
+
       xp: Math.max(
         0,
         progress.xp - xpReward
       ),
+
       lastUpdated: new Date().toISOString(),
     });
   };
@@ -222,10 +255,12 @@ export function useProgress() {
 
     await save({
       ...progress,
+
       downloadedLessons: [
         ...progress.downloadedLessons,
         lessonId,
       ],
+
       lastUpdated: new Date().toISOString(),
     });
   };
@@ -235,10 +270,12 @@ export function useProgress() {
   ) => {
     await save({
       ...progress,
+
       downloadedLessons:
         progress.downloadedLessons.filter(
           (id) => id !== lessonId
         ),
+
       lastUpdated: new Date().toISOString(),
     });
   };

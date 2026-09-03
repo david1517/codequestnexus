@@ -1,98 +1,22 @@
 import { useState } from 'react';
-import type { TeacherApplication } from '@/types';
-
-const initialApplications: TeacherApplication[] = [
-  {
-    id: 'application-demo-001',
-    userId: 'teacher-demo-001',
-    name: 'Professor Demonstração',
-    email: 'professor@codequest.local',
-    phone: '(11) 99999-9999',
-    birthDate: '1990-05-20',
-    knowledgeArea: 'Programação',
-    documentUrl: '#',
-    status: 'pending',
-    submittedAt: new Date().toISOString(),
-  },
-];
-
-const themes = [
-  {
-    name: 'Nexus',
-    primary: '#00D4FF',
-    secondary: '#8B5CF6',
-    background: '#080D19',
-  },
-  {
-    name: 'Cyber',
-    primary: '#00FF88',
-    secondary: '#00D4FF',
-    background: '#06110F',
-  },
-  {
-    name: 'Galaxy',
-    primary: '#C084FC',
-    secondary: '#6366F1',
-    background: '#0D0920',
-  },
-];
 
 export function AdminDashboard() {
-  const [applications, setApplications] =
-    useState<TeacherApplication[]>(
-      initialApplications
-    );
+  const [activeTab, setActiveTab] = useState<
+    'overview' | 'teachers' | 'theme'
+  >('overview');
 
-  const [selectedId, setSelectedId] =
-    useState<string | null>(
-      initialApplications[0]?.id || null
-    );
+  const [background, setBackground] = useState('#050816');
+  const [primaryColor, setPrimaryColor] = useState('#00D4FF');
 
-  const [selectedTheme, setSelectedTheme] =
-    useState(themes[0]);
-
-  const [background, setBackground] =
-    useState('#080D19');
-
-  const selectedApplication =
-    applications.find(
-      (application) =>
-        application.id === selectedId
-    ) || null;
-
-  function approve(id: string) {
-    setApplications((old) =>
-      old.map((application) =>
-        application.id === id
-          ? {
-              ...application,
-              status: 'approved',
-              reviewedAt:
-                new Date().toISOString(),
-              reviewedBy: 'admin',
-            }
-          : application
-      )
-    );
-  }
-
-  function reject(id: string) {
-    setApplications((old) =>
-      old.map((application) =>
-        application.id === id
-          ? {
-              ...application,
-              status: 'rejected',
-              reviewedAt:
-                new Date().toISOString(),
-              reviewedBy: 'admin',
-              rejectionReason:
-                'Dados precisam ser revisados.',
-            }
-          : application
-      )
-    );
-  }
+  const teachers = [
+    {
+      id: 1,
+      name: 'Professor de Demonstração',
+      email: 'professor@codequest.com',
+      area: 'Programação',
+      status: 'Pendente',
+    },
+  ];
 
   return (
     <div
@@ -106,625 +30,385 @@ export function AdminDashboard() {
     >
       <div
         style={{
-          maxWidth: '1400px',
+          maxWidth: '1200px',
           margin: '0 auto',
         }}
       >
-        <header
-          style={{
-            marginBottom: '30px',
-          }}
-        >
+        <header style={{ marginBottom: '30px' }}>
           <div
             style={{
-              color: selectedTheme.primary,
+              display: 'inline-block',
+              padding: '6px 12px',
+              borderRadius: '20px',
+              background: `${primaryColor}22`,
+              border: `1px solid ${primaryColor}`,
+              color: primaryColor,
               fontSize: '12px',
-              letterSpacing: '4px',
-              fontWeight: 'bold',
+              marginBottom: '10px',
             }}
           >
-            NEXUS ADMINISTRATION
+            ÁREA ADMINISTRATIVA
           </div>
 
           <h1
             style={{
-              fontSize: '34px',
-              margin: '8px 0',
+              fontSize: '36px',
+              margin: '0 0 8px',
             }}
           >
-            👑 Central Administrativa
+            Painel do Administrador
           </h1>
 
           <p
             style={{
               color: '#9CA3AF',
+              margin: 0,
             }}
           >
-            Área restrita para gerenciamento do
-            CodeQuest.
+            Gerencie professores, usuários e aparência do CodeQuest.
           </p>
         </header>
 
-        <div
+        <nav
           style={{
-            display: 'grid',
-            gridTemplateColumns:
-              'repeat(auto-fit, minmax(180px, 1fr))',
-            gap: '15px',
-            marginBottom: '25px',
+            display: 'flex',
+            gap: '10px',
+            marginBottom: '30px',
+            flexWrap: 'wrap',
           }}
         >
-          <AdminStat
-            icon="⏳"
-            title="Pendentes"
-            value={
-              applications.filter(
-                (item) => item.status === 'pending'
-              ).length
-            }
-          />
+          <button
+            onClick={() => setActiveTab('overview')}
+            style={buttonStyle(activeTab === 'overview', primaryColor)}
+          >
+            Visão geral
+          </button>
 
-          <AdminStat
-            icon="✅"
-            title="Aprovados"
-            value={
-              applications.filter(
-                (item) => item.status === 'approved'
-              ).length
-            }
-          />
+          <button
+            onClick={() => setActiveTab('teachers')}
+            style={buttonStyle(activeTab === 'teachers', primaryColor)}
+          >
+            Professores
+          </button>
 
-          <AdminStat
-            icon="❌"
-            title="Rejeitados"
-            value={
-              applications.filter(
-                (item) => item.status === 'rejected'
-              ).length
-            }
-          />
-        </div>
+          <button
+            onClick={() => setActiveTab('theme')}
+            style={buttonStyle(activeTab === 'theme', primaryColor)}
+          >
+            Tema do site
+          </button>
+        </nav>
 
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns:
-              '320px minmax(0, 1fr)',
-            gap: '20px',
-          }}
-        >
-          <section
+        {activeTab === 'overview' && (
+          <div
             style={{
-              background: '#0D1424',
-              border: '1px solid #1F2937',
-              borderRadius: '16px',
-              padding: '15px',
+              display: 'grid',
+              gridTemplateColumns:
+                'repeat(auto-fit, minmax(220px, 1fr))',
+              gap: '20px',
             }}
           >
-            <h2
+            <StatCard
+              title="Usuários"
+              value="0"
+              description="Usuários cadastrados"
+              color={primaryColor}
+            />
+
+            <StatCard
+              title="Professores"
+              value="0"
+              description="Professores aprovados"
+              color="#8B5CF6"
+            />
+
+            <StatCard
+              title="Pendentes"
+              value="1"
+              description="Cadastros aguardando análise"
+              color="#FFD700"
+            />
+
+            <StatCard
+              title="Cursos"
+              value="0"
+              description="Cursos publicados"
+              color="#00FF88"
+            />
+          </div>
+        )}
+
+        {activeTab === 'teachers' && (
+          <section>
+            <div
               style={{
-                fontSize: '16px',
-                margin: '5px 5px 15px',
+                background: '#111827',
+                border: '1px solid #1F2937',
+                borderRadius: '14px',
+                padding: '24px',
               }}
             >
-              👨‍🏫 Professores
-            </h2>
+              <h2 style={{ marginTop: 0 }}>
+                Aprovação de professores
+              </h2>
 
-            {applications.length === 0 && (
               <p
                 style={{
-                  color: '#6B7280',
+                  color: '#9CA3AF',
+                  lineHeight: 1.6,
                 }}
               >
-                Nenhuma solicitação.
+                Quando o cadastro de um professor estiver conectado ao
+                Firebase, os pedidos aparecerão aqui para análise.
               </p>
-            )}
 
-            {applications.map((application) => (
-              <button
-                key={application.id}
-                onClick={() =>
-                  setSelectedId(application.id)
-                }
-                style={{
-                  width: '100%',
-                  textAlign: 'left',
-                  background:
-                    selectedId === application.id
-                      ? '#17233A'
-                      : 'transparent',
-                  border: '1px solid #1F2937',
-                  borderRadius: '10px',
-                  padding: '14px',
-                  marginBottom: '8px',
-                  color: 'white',
-                  cursor: 'pointer',
-                }}
-              >
-                <strong>
-                  {application.name}
-                </strong>
-
+              {teachers.map((teacher) => (
                 <div
-                  style={{
-                    color: '#9CA3AF',
-                    fontSize: '12px',
-                    marginTop: '5px',
-                  }}
-                >
-                  {application.knowledgeArea}
-                </div>
-
-                <Status status={application.status} />
-              </button>
-            ))}
-          </section>
-
-          <section
-            style={{
-              background: '#0D1424',
-              border: '1px solid #1F2937',
-              borderRadius: '16px',
-              padding: '25px',
-            }}
-          >
-            {selectedApplication ? (
-              <>
-                <h2>
-                  📋 Dados do professor
-                </h2>
-
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns:
-                      'repeat(auto-fit, minmax(220px, 1fr))',
-                    gap: '15px',
-                    marginTop: '20px',
-                  }}
-                >
-                  <Data
-                    label="Nome"
-                    value={
-                      selectedApplication.name
-                    }
-                  />
-
-                  <Data
-                    label="Email"
-                    value={
-                      selectedApplication.email
-                    }
-                  />
-
-                  <Data
-                    label="Telefone"
-                    value={
-                      selectedApplication.phone
-                    }
-                  />
-
-                  <Data
-                    label="Nascimento"
-                    value={
-                      selectedApplication.birthDate
-                    }
-                  />
-
-                  <Data
-                    label="Área"
-                    value={
-                      selectedApplication.knowledgeArea
-                    }
-                  />
-                </div>
-
-                <div
+                  key={teacher.id}
                   style={{
                     marginTop: '20px',
-                    background: '#080D19',
-                    borderRadius: '12px',
                     padding: '20px',
+                    borderRadius: '10px',
+                    background: '#0A1020',
+                    border: '1px solid #374151',
                   }}
                 >
-                  <strong>
-                    📄 Documento profissional
-                  </strong>
+                  <h3 style={{ marginTop: 0 }}>
+                    {teacher.name}
+                  </h3>
 
-                  <p
-                    style={{
-                      color: '#9CA3AF',
-                      fontSize: '13px',
-                    }}
-                  >
-                    O documento enviado pelo professor
-                    aparecerá aqui quando o Firebase
-                    estiver conectado.
+                  <p style={{ color: '#D1D5DB' }}>
+                    Email: {teacher.email}
                   </p>
 
-                  <a
-                    href={
-                      selectedApplication.documentUrl
-                    }
-                    target="_blank"
-                    rel="noreferrer"
+                  <p style={{ color: '#D1D5DB' }}>
+                    Área: {teacher.area}
+                  </p>
+
+                  <span
                     style={{
-                      color: selectedTheme.primary,
+                      display: 'inline-block',
+                      padding: '6px 10px',
+                      borderRadius: '6px',
+                      background: '#FFD70022',
+                      color: '#FFD700',
+                      fontSize: '12px',
                     }}
                   >
-                    👁️ Visualizar documento
-                  </a>
-                </div>
+                    {teacher.status}
+                  </span>
 
-                {selectedApplication.status ===
-                  'pending' && (
                   <div
                     style={{
                       display: 'flex',
                       gap: '10px',
                       marginTop: '20px',
-                      flexWrap: 'wrap',
                     }}
                   >
                     <button
-                      onClick={() =>
-                        approve(
-                          selectedApplication.id
-                        )
-                      }
-                      style={approveButton}
+                      style={{
+                        padding: '10px 16px',
+                        border: 'none',
+                        borderRadius: '8px',
+                        background: '#00FF88',
+                        color: '#00150A',
+                        fontWeight: 'bold',
+                        cursor: 'pointer',
+                      }}
                     >
-                      ✅ Aprovar professor
+                      Aprovar
                     </button>
 
                     <button
-                      onClick={() =>
-                        reject(
-                          selectedApplication.id
-                        )
-                      }
-                      style={rejectButton}
+                      style={{
+                        padding: '10px 16px',
+                        border: '1px solid #FF4444',
+                        borderRadius: '8px',
+                        background: 'transparent',
+                        color: '#FF4444',
+                        fontWeight: 'bold',
+                        cursor: 'pointer',
+                      }}
                     >
-                      ❌ Rejeitar
+                      Recusar
                     </button>
                   </div>
-                )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
-                {selectedApplication.status ===
-                  'approved' && (
-                  <div
-                    style={successBox}
-                  >
-                    ✅ Professor aprovado.
-                  </div>
-                )}
+        {activeTab === 'theme' && (
+          <section>
+            <div
+              style={{
+                background: '#111827',
+                border: '1px solid #1F2937',
+                borderRadius: '14px',
+                padding: '24px',
+              }}
+            >
+              <h2 style={{ marginTop: 0 }}>
+                Personalização do site
+              </h2>
 
-                {selectedApplication.status ===
-                  'rejected' && (
-                  <div
-                    style={errorBox}
-                  >
-                    ❌ Professor rejeitado.
-                  </div>
-                )}
-              </>
-            ) : (
+              <p
+                style={{
+                  color: '#9CA3AF',
+                  marginBottom: '30px',
+                }}
+              >
+                Aqui o administrador poderá alterar as cores e o
+                fundo do CodeQuest.
+              </p>
+
               <div
                 style={{
-                  padding: '80px 20px',
-                  textAlign: 'center',
-                  color: '#9CA3AF',
+                  display: 'grid',
+                  gap: '20px',
+                  maxWidth: '500px',
                 }}
               >
-                Selecione uma solicitação.
-              </div>
-            )}
-          </section>
-        </div>
+                <label>
+                  <span
+                    style={{
+                      display: 'block',
+                      marginBottom: '8px',
+                    }}
+                  >
+                    Cor principal
+                  </span>
 
-        <section
-          style={{
-            marginTop: '20px',
-            background: '#0D1424',
-            border: '1px solid #1F2937',
-            borderRadius: '16px',
-            padding: '25px',
-          }}
-        >
-          <h2>🎨 Aparência do site</h2>
+                  <input
+                    type="color"
+                    value={primaryColor}
+                    onChange={(event) =>
+                      setPrimaryColor(event.target.value)
+                    }
+                    style={{
+                      width: '100%',
+                      height: '50px',
+                      cursor: 'pointer',
+                    }}
+                  />
+                </label>
 
-          <p
-            style={{
-              color: '#9CA3AF',
-            }}
-          >
-            Escolha o tema que será utilizado pelo
-            site.
-          </p>
+                <label>
+                  <span
+                    style={{
+                      display: 'block',
+                      marginBottom: '8px',
+                    }}
+                  >
+                    Cor do fundo
+                  </span>
 
-          <div
-            style={{
-              display: 'flex',
-              gap: '12px',
-              flexWrap: 'wrap',
-              marginTop: '20px',
-            }}
-          >
-            {themes.map((theme) => (
-              <button
-                key={theme.name}
-                onClick={() =>
-                  setSelectedTheme(theme)
-                }
-                style={{
-                  padding: '15px',
-                  minWidth: '150px',
-                  borderRadius: '10px',
-                  border:
-                    selectedTheme.name ===
-                    theme.name
-                      ? `2px solid ${theme.primary}`
-                      : '1px solid #29364D',
-                  background: theme.background,
-                  color: 'white',
-                  cursor: 'pointer',
-                }}
-              >
-                <strong>
-                  {theme.name}
-                </strong>
+                  <input
+                    type="color"
+                    value={background}
+                    onChange={(event) =>
+                      setBackground(event.target.value)
+                    }
+                    style={{
+                      width: '100%',
+                      height: '50px',
+                      cursor: 'pointer',
+                    }}
+                  />
+                </label>
 
                 <div
                   style={{
-                    marginTop: '8px',
-                    display: 'flex',
-                    gap: '5px',
+                    padding: '20px',
+                    borderRadius: '10px',
+                    border: `1px solid ${primaryColor}`,
+                    background,
                   }}
                 >
-                  <span
-                    style={{
-                      width: '20px',
-                      height: '20px',
-                      borderRadius: '50%',
-                      background: theme.primary,
-                    }}
-                  />
+                  <strong style={{ color: primaryColor }}>
+                    Pré-visualização
+                  </strong>
 
-                  <span
-                    style={{
-                      width: '20px',
-                      height: '20px',
-                      borderRadius: '50%',
-                      background: theme.secondary,
-                    }}
-                  />
+                  <p style={{ color: '#D1D5DB' }}>
+                    Assim ficará o fundo do painel.
+                  </p>
                 </div>
-              </button>
-            ))}
-          </div>
-
-          <div
-            style={{
-              marginTop: '25px',
-              maxWidth: '500px',
-            }}
-          >
-            <label
-              style={{
-                color: '#D1D5DB',
-                fontSize: '13px',
-              }}
-            >
-              Fundo personalizado
-            </label>
-
-            <div
-              style={{
-                display: 'flex',
-                gap: '10px',
-                marginTop: '8px',
-              }}
-            >
-              <input
-                type="color"
-                value={background}
-                onChange={(event) =>
-                  setBackground(
-                    event.target.value
-                  )
-                }
-                style={{
-                  width: '55px',
-                  height: '45px',
-                }}
-              />
-
-              <input
-                value={background}
-                onChange={(event) =>
-                  setBackground(
-                    event.target.value
-                  )
-                }
-                style={inputStyle}
-              />
+              </div>
             </div>
-          </div>
-
-          <div
-            style={{
-              marginTop: '20px',
-              padding: '15px',
-              borderRadius: '10px',
-              background: selectedTheme.background,
-              border: `1px solid ${selectedTheme.primary}`,
-            }}
-          >
-            <strong>
-              Pré-visualização do tema
-            </strong>
-
-            <p
-              style={{
-                color: selectedTheme.primary,
-              }}
-            >
-              Este é o visual que o administrador
-              escolheu.
-            </p>
-          </div>
-        </section>
+          </section>
+        )}
       </div>
     </div>
   );
 }
 
-function AdminStat({
-  icon,
+function StatCard({
   title,
   value,
+  description,
+  color,
 }: {
-  icon: string;
   title: string;
-  value: number;
-}) {
-  return (
-    <div
-      style={{
-        background: '#0D1424',
-        border: '1px solid #1F2937',
-        borderRadius: '14px',
-        padding: '20px',
-      }}
-    >
-      <div style={{ fontSize: '25px' }}>
-        {icon}
-      </div>
-
-      <div
-        style={{
-          color: '#9CA3AF',
-          fontSize: '12px',
-          marginTop: '8px',
-        }}
-      >
-        {title}
-      </div>
-
-      <strong
-        style={{
-          fontSize: '25px',
-        }}
-      >
-        {value}
-      </strong>
-    </div>
-  );
-}
-
-function Data({
-  label,
-  value,
-}: {
-  label: string;
   value: string;
+  description: string;
+  color: string;
 }) {
   return (
     <div
       style={{
         background: '#111827',
-        borderRadius: '10px',
-        padding: '15px',
+        border: '1px solid #1F2937',
+        borderRadius: '14px',
+        padding: '24px',
       }}
     >
       <div
         style={{
-          color: '#6B7280',
-          fontSize: '11px',
+          color,
+          fontSize: '13px',
+          fontWeight: 'bold',
+          marginBottom: '10px',
         }}
       >
-        {label}
+        {title}
       </div>
 
-      <strong
+      <div
         style={{
-          display: 'block',
-          marginTop: '5px',
+          fontSize: '36px',
+          fontWeight: 'bold',
+          marginBottom: '8px',
         }}
       >
         {value}
-      </strong>
+      </div>
+
+      <div
+        style={{
+          color: '#9CA3AF',
+          fontSize: '13px',
+        }}
+      >
+        {description}
+      </div>
     </div>
   );
 }
 
-function Status({
-  status,
-}: {
-  status: TeacherApplication['status'];
-}) {
-  const data = {
-    pending: ['⏳ Pendente', '#FFD700'],
-    approved: ['✅ Aprovado', '#00FF88'],
-    rejected: ['❌ Rejeitado', '#FF4444'],
-  }[status];
-
-  return (
-    <div
-      style={{
-        marginTop: '8px',
-        color: data[1],
-        fontSize: '11px',
-        fontWeight: 'bold',
-      }}
-    >
-      {data[0]}
-    </div>
-  );
+function buttonStyle(
+  active: boolean,
+  color: string
+): React.CSSProperties {
+  return {
+    padding: '10px 16px',
+    borderRadius: '8px',
+    border: active
+      ? `1px solid ${color}`
+      : '1px solid #374151',
+    background: active ? `${color}22` : '#111827',
+    color: active ? color : '#D1D5DB',
+    cursor: 'pointer',
+    fontWeight: active ? 'bold' : 'normal',
+  };
 }
-
-const inputStyle = {
-  width: '100%',
-  boxSizing: 'border-box' as const,
-  background: '#080D19',
-  border: '1px solid #29364D',
-  borderRadius: '8px',
-  padding: '12px',
-  color: 'white',
-};
-
-const approveButton = {
-  border: 'none',
-  borderRadius: '9px',
-  padding: '12px 18px',
-  background: '#00A86B',
-  color: 'white',
-  fontWeight: 'bold',
-  cursor: 'pointer',
-};
-
-const rejectButton = {
-  border: 'none',
-  borderRadius: '9px',
-  padding: '12px 18px',
-  background: '#9F1239',
-  color: 'white',
-  fontWeight: 'bold',
-  cursor: 'pointer',
-};
-
-const successBox = {
-  marginTop: '20px',
-  padding: '15px',
-  borderRadius: '10px',
-  background: '#052E1B',
-  color: '#00FF88',
-};
-
-const errorBox = {
-  marginTop: '20px',
-  padding: '15px',
-  borderRadius: '10px',
-  background: '#3B0A14',
-  color: '#FF4444',
-};

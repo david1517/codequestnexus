@@ -1,884 +1,903 @@
-import type { ReactNode } from 'react';
-import {
-  useState,
-  type ChangeEvent,
-  type FormEvent,
-} from 'react';
+  import { useState } from 'react';
+  import { Link, useNavigate } from 'react-router-dom';
+  import {
+    User,
+    GraduationCap,
+    Shield,
+    Mail,
+    Lock,
+    Phone,
+    Calendar,
+    BookOpen,
+    FileText,
+    Eye,
+    EyeOff,
+    Zap,
+    ArrowLeft,
+  } from 'lucide-react';
 
-import {
-  User,
-  GraduationCap,
-  Shield,
-  Upload,
-  ArrowLeft,
-} from 'lucide-react';
+  import { useAuthStore } from '@/stores/useAuthStore';
 
-import { Link, useNavigate } from 'react-router-dom';
+  type Role = 'student' | 'teacher';
 
-import { useAuthStore } from '@/stores/useAuthStore';
+  export function Register() {
+    const navigate = useNavigate();
 
-import type { UserRole } from '@/types';
+    const {
+      register,
+      loading,
+      error,
+    } = useAuthStore();
 
-export function Register() {
-  const navigate =
-    useNavigate();
+    const [role, setRole] =
+      useState<Role>('student');
 
-  const { register, loading, error } =
-    useAuthStore();
+    const [username, setUsername] =
+      useState('');
 
-  const [role, setRole] =
-    useState<UserRole>('student');
+    const [email, setEmail] =
+      useState('');
 
-  const [username, setUsername] =
-    useState('');
+    const [password, setPassword] =
+      useState('');
 
-  const [email, setEmail] =
-    useState('');
+    const [confirmPassword, setConfirmPassword] =
+      useState('');
 
-  const [password, setPassword] =
-    useState('');
+    const [name, setName] =
+      useState('');
 
-  const [teacherName, setTeacherName] =
-    useState('');
+    const [phone, setPhone] =
+      useState('');
 
-  const [phone, setPhone] =
-    useState('');
+    const [birthDate, setBirthDate] =
+      useState('');
 
-  const [birthDate, setBirthDate] =
-    useState('');
+    const [knowledgeArea, setKnowledgeArea] =
+      useState('');
 
-  const [knowledgeArea, setKnowledgeArea] =
-    useState('');
+    const [document, setDocument] =
+      useState<File | null>(null);
 
-  const [document, setDocument] =
-    useState<File | null>(null);
+    const [showPassword, setShowPassword] =
+      useState(false);
 
-  const [localError, setLocalError] =
-    useState('');
+    const [showConfirmPassword, setShowConfirmPassword] =
+      useState(false);
 
-  function handleDocument(
-    event: ChangeEvent<HTMLInputElement>
-  ) {
-    const file =
-      event.target.files?.[0];
+    const [localError, setLocalError] =
+      useState('');
 
-    if (!file) {
-      setDocument(null);
-      return;
-    }
+    const handleSubmit = async (
+      event: React.FormEvent
+    ) => {
+      event.preventDefault();
 
-    /*
-     * Permitimos documentos comuns.
-     */
-    const allowedTypes = [
-      'application/pdf',
-      'image/jpeg',
-      'image/png',
-    ];
+      setLocalError('');
 
-    if (
-      !allowedTypes.includes(
-        file.type
-      )
-    ) {
-      setLocalError(
-        'Envie um PDF, JPG ou PNG.'
-      );
-
-      event.target.value = '';
-
-      return;
-    }
-
-    /*
-     * Limite de 10 MB.
-     */
-    if (
-      file.size >
-      10 * 1024 * 1024
-    ) {
-      setLocalError(
-        'O documento deve ter no máximo 10 MB.'
-      );
-
-      event.target.value = '';
-
-      return;
-    }
-
-    setLocalError('');
-
-    setDocument(file);
-  }
-
-  async function handleSubmit(
-    event: FormEvent<HTMLFormElement>
-  ) {
-    event.preventDefault();
-
-    setLocalError('');
-
-    /*
-     * Validação básica do professor.
-     */
-    if (role === 'teacher') {
-      if (!teacherName.trim()) {
+      if (!username.trim()) {
         setLocalError(
-          'Digite seu nome completo.'
+          'Digite seu nome de usuário.'
         );
-
         return;
       }
 
-      if (!phone.trim()) {
+      if (!email.trim()) {
         setLocalError(
-          'Digite seu telefone.'
+          'Digite seu email.'
         );
-
         return;
       }
 
-      if (!birthDate) {
+      if (password.length < 6) {
         setLocalError(
-          'Informe sua data de nascimento.'
+          'A senha precisa ter pelo menos 6 caracteres.'
         );
-
         return;
       }
 
-      if (!knowledgeArea.trim()) {
+      if (password !== confirmPassword) {
         setLocalError(
-          'Informe sua área de conhecimento.'
+          'As senhas não são iguais.'
         );
-
         return;
       }
-
-      if (!document) {
-        setLocalError(
-          'Envie um documento que comprove seu conhecimento.'
-        );
-
-        return;
-      }
-    }
-
-    try {
-      await register({
-        username,
-        email,
-        password,
-        role,
-
-        ...(role === 'teacher'
-          ? {
-              teacherApplication: {
-                name:
-                  teacherName,
-                phone,
-                birthDate,
-                knowledgeArea,
-                document,
-              },
-            }
-          : {}),
-      });
 
       /*
-       * Depois do cadastro:
-       *
-       * aluno → dashboard
-       * professor → painel professor
-       * admin → painel admin
-       */
+      * Professor precisa preencher
+      * informações adicionais.
+      */
       if (role === 'teacher') {
-        navigate('/teacher');
-      } else {
-        navigate('/dashboard');
+        if (!name.trim()) {
+          setLocalError(
+            'Digite seu nome completo.'
+          );
+          return;
+        }
+
+        if (!phone.trim()) {
+          setLocalError(
+            'Digite seu telefone.'
+          );
+          return;
+        }
+
+        if (!birthDate) {
+          setLocalError(
+            'Informe sua data de nascimento.'
+          );
+          return;
+        }
+
+        if (!knowledgeArea.trim()) {
+          setLocalError(
+            'Informe sua área de conhecimento.'
+          );
+          return;
+        }
+
+        if (!document) {
+          setLocalError(
+            'Envie um documento que comprove seu conhecimento.'
+          );
+          return;
+        }
       }
-    } catch {
-      /*
-       * O erro já é guardado
-       * pelo AuthStore.
-       */
-    }
+
+      try {
+        await register({
+          username,
+          email,
+          password,
+          role,
+
+          ...(role === 'teacher'
+            ? {
+                teacherApplication: {
+                  name,
+                  phone,
+                  birthDate,
+                  knowledgeArea,
+                  document,
+                },
+              }
+            : {}),
+        });
+
+        /*
+        * Depois do cadastro:
+        *
+        * aluno -> dashboard
+        * professor -> painel professor
+        */
+        if (role === 'teacher') {
+          navigate('/teacher');
+        } else {
+          navigate('/dashboard');
+        }
+      } catch {
+        /*
+        * O erro já fica guardado
+        * no Zustand.
+        */
+      }
+    };
+
+    const inputStyle: React.CSSProperties = {
+      width: '100%',
+      boxSizing: 'border-box',
+      padding: '13px 14px',
+      paddingLeft: '44px',
+      borderRadius: '10px',
+      border: '1px solid #263247',
+      background: '#0B1220',
+      color: 'white',
+      outline: 'none',
+      fontSize: '14px',
+    };
+
+    const labelStyle: React.CSSProperties = {
+      display: 'block',
+      color: '#CBD5E1',
+      fontSize: '13px',
+      fontWeight: 600,
+      marginBottom: '7px',
+    };
+
+  
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          background:
+            'radial-gradient(circle at top, #16213D 0%, #070B14 55%, #03050A 100%)',
+          color: 'white',
+          padding: '30px 20px',
+          fontFamily: 'sans-serif',
+        }}
+      >
+        <div
+          style={{
+            maxWidth: '720px',
+            margin: '0 auto',
+          }}
+        >
+          <Link
+            to="/"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              color: '#94A3B8',
+              textDecoration: 'none',
+              marginBottom: '25px',
+            }}
+          >
+            <ArrowLeft size={18} />
+            Voltar
+          </Link>
+
+          <div
+            style={{
+              textAlign: 'center',
+              marginBottom: '30px',
+            }}
+          >
+            <div
+              style={{
+                width: '56px',
+                height: '56px',
+                margin: '0 auto 15px',
+                borderRadius: '14px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background:
+                  'linear-gradient(135deg, #00D4FF, #8B5CF6)',
+              }}
+            >
+              <Zap
+                size={28}
+                color="white"
+                fill="white"
+              />
+            </div>
+
+            <h1
+              style={{
+                margin: 0,
+                fontSize: '30px',
+              }}
+            >
+              Criar conta
+            </h1>
+
+            <p
+              style={{
+                color: '#94A3B8',
+                marginTop: '8px',
+              }}
+            >
+              Entre para o CodeQuest Nexus
+            </p>
+          </div>
+
+          <form
+            onSubmit={handleSubmit}
+            style={{
+              background: '#0D1525',
+              border:
+                '1px solid #1E293B',
+              borderRadius: '18px',
+              padding: '28px',
+            }}
+          >
+            <h2
+              style={{
+                marginTop: 0,
+                fontSize: '18px',
+              }}
+            >
+              1. Escolha seu tipo de conta
+            </h2>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns:
+                  'repeat(2, 1fr)',
+                gap: '12px',
+                marginBottom: '28px',
+              }}
+            >
+              <RoleButton
+                active={role === 'student'}
+                icon={<User size={22} />}
+                title="Aluno"
+                description="Aprender e completar missões"
+                onClick={() =>
+                  setRole('student')
+                }
+              />
+
+              <RoleButton
+                active={role === 'teacher'}
+                icon={
+                  <GraduationCap size={22} />
+                }
+                title="Professor"
+                description="Criar cursos e ensinar"
+                onClick={() =>
+                  setRole('teacher')
+                }
+              />
+            </div>
+
+            <h2
+              style={{
+                fontSize: '18px',
+                marginBottom: '18px',
+              }}
+            >
+              2. Seus dados
+            </h2>
+
+            <Field
+              label="Nome de usuário"
+              icon={<User size={18} />}
+            >
+              <input
+                value={username}
+                onChange={(e) =>
+                  setUsername(e.target.value)
+                }
+                placeholder="Ex.: JoãoCoder"
+                style={inputStyle}
+              />
+            </Field>
+
+            <Field
+              label="Email"
+              icon={<Mail size={18} />}
+            >
+              <input
+                type="email"
+                value={email}
+                onChange={(e) =>
+                  setEmail(e.target.value)
+                }
+                placeholder="voce@email.com"
+                style={inputStyle}
+              />
+            </Field>
+
+            <Field
+              label="Senha"
+              icon={<Lock size={18} />}
+            >
+              <div
+                style={{
+                  position: 'relative',
+                }}
+              >
+                <input
+                  type={
+                    showPassword
+                      ? 'text'
+                      : 'password'
+                  }
+                  value={password}
+                  onChange={(e) =>
+                    setPassword(
+                      e.target.value
+                    )
+                  }
+                  placeholder="Mínimo 6 caracteres"
+                  style={inputStyle}
+                />
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowPassword(
+                      (value) => !value
+                    )
+                  }
+                  style={{
+                    position: 'absolute',
+                    right: '12px',
+                    top: '50%',
+                    transform:
+                      'translateY(-50%)',
+                    background: 'none',
+                    border: 0,
+                    color: '#64748B',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {showPassword ? (
+                    <EyeOff size={18} />
+                  ) : (
+                    <Eye size={18} />
+                  )}
+                </button>
+              </div>
+            </Field>
+
+            <Field
+              label="Confirmar senha"
+              icon={<Lock size={18} />}
+            >
+              <div
+                style={{
+                  position: 'relative',
+                }}
+              >
+                <input
+                  type={
+                    showConfirmPassword
+                      ? 'text'
+                      : 'password'
+                  }
+                  value={confirmPassword}
+                  onChange={(e) =>
+                    setConfirmPassword(
+                      e.target.value
+                    )
+                  }
+                  placeholder="Digite a senha novamente"
+                  style={inputStyle}
+                />
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowConfirmPassword(
+                      (value) => !value
+                    )
+                  }
+                  style={{
+                    position: 'absolute',
+                    right: '12px',
+                    top: '50%',
+                    transform:
+                      'translateY(-50%)',
+                    background: 'none',
+                    border: 0,
+                    color: '#64748B',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {showConfirmPassword ? (
+                    <EyeOff size={18} />
+                  ) : (
+                    <Eye size={18} />
+                  )}
+                </button>
+              </div>
+            </Field>
+
+            {role === 'teacher' && (
+              <>
+                <div
+                  style={{
+                    height: '1px',
+                    background: '#1E293B',
+                    margin:
+                      '28px 0',
+                  }}
+                />
+
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    marginBottom: '8px',
+                  }}
+                >
+                  <GraduationCap
+                    size={22}
+                    color="#00D4FF"
+                  />
+
+                  <h2
+                    style={{
+                      margin: 0,
+                      fontSize: '18px',
+                    }}
+                  >
+                    3. Dados do professor
+                  </h2>
+                </div>
+
+                <p
+                  style={{
+                    color: '#94A3B8',
+                    fontSize: '13px',
+                    lineHeight: 1.5,
+                    marginBottom: '20px',
+                  }}
+                >
+                  Essas informações serão
+                  analisadas pelo administrador
+                  antes da aprovação da conta.
+                </p>
+
+                <Field
+                  label="Nome completo"
+                  icon={<User size={18} />}
+                >
+                  <input
+                    value={name}
+                    onChange={(e) =>
+                      setName(e.target.value)
+                    }
+                    placeholder="Seu nome completo"
+                    style={inputStyle}
+                  />
+                </Field>
+
+                <Field
+                  label="Telefone"
+                  icon={<Phone size={18} />}
+                >
+                  <input
+                    value={phone}
+                    onChange={(e) =>
+                      setPhone(e.target.value)
+                    }
+                    placeholder="(00) 00000-0000"
+                    style={inputStyle}
+                  />
+                </Field>
+
+                <Field
+                  label="Data de nascimento"
+                  icon={
+                    <Calendar size={18} />
+                  }
+                >
+                  <input
+                    type="date"
+                    value={birthDate}
+                    onChange={(e) =>
+                      setBirthDate(
+                        e.target.value
+                      )
+                    }
+                    style={inputStyle}
+                  />
+                </Field>
+
+                <Field
+                  label="Área de conhecimento"
+                  icon={
+                    <BookOpen size={18} />
+                  }
+                >
+                  <input
+                    value={knowledgeArea}
+                    onChange={(e) =>
+                      setKnowledgeArea(
+                        e.target.value
+                      )
+                    }
+                    placeholder="Ex.: JavaScript, Python, Matemática..."
+                    style={inputStyle}
+                  />
+                </Field>
+
+                <div
+                  style={{
+                    marginBottom: '20px',
+                  }}
+                >
+                  <label
+                    style={labelStyle}
+                  >
+                    Documento que comprova seu conhecimento
+                  </label>
+
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '16px',
+                      border:
+                        '1px dashed #334155',
+                      borderRadius: '10px',
+                      cursor: 'pointer',
+                      background:
+                        '#0B1220',
+                    }}
+                  >
+                    <FileText
+                      size={22}
+                      color="#00D4FF"
+                    />
+
+                    <div
+                      style={{
+                        flex: 1,
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize:
+                            '13px',
+                          fontWeight:
+                            600,
+                        }}
+                      >
+                        {document
+                          ? document.name
+                          : 'Clique para escolher um arquivo'}
+                      </div>
+
+                      <div
+                        style={{
+                          color:
+                            '#64748B',
+                          fontSize:
+                            '11px',
+                          marginTop:
+                            '4px',
+                        }}
+                      >
+                        PDF, JPG ou PNG
+                      </div>
+                    </div>
+
+                    <input
+                      type="file"
+                      accept=".pdf,.jpg,.jpeg,.png"
+                      onChange={(e) =>
+                        setDocument(
+                          e.target.files?.[0] ||
+                            null
+                        )
+                      }
+                      style={{
+                        display: 'none',
+                      }}
+                    />
+                  </label>
+                </div>
+
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: '10px',
+                    padding: '14px',
+                    background:
+                      'rgba(0,212,255,0.06)',
+                    border:
+                      '1px solid rgba(0,212,255,0.15)',
+                    borderRadius: '10px',
+                    color: '#94A3B8',
+                    fontSize: '12px',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <Shield
+                    size={18}
+                    color="#00D4FF"
+                    style={{
+                      flexShrink: 0,
+                    }}
+                  />
+
+                  <span>
+                    Seu cadastro ficará
+                    <strong
+                      style={{
+                        color: '#00D4FF',
+                      }}
+                    >
+                      {' '}
+                      pendente
+                    </strong>{' '}
+                    até um administrador
+                    verificar suas informações.
+                  </span>
+                </div>
+              </>
+            )}
+
+            {(localError || error) && (
+              <div
+                style={{
+                  marginTop: '20px',
+                  padding: '12px 14px',
+                  borderRadius: '9px',
+                  background:
+                    'rgba(255,68,68,0.1)',
+                  border:
+                    '1px solid rgba(255,68,68,0.3)',
+                  color: '#FF8888',
+                  fontSize: '13px',
+                }}
+              >
+                {localError || error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              style={{
+                width: '100%',
+                marginTop: '24px',
+                padding: '15px',
+                border: 0,
+                borderRadius: '10px',
+                background:
+                  'linear-gradient(135deg, #00D4FF, #8B5CF6)',
+                color: 'white',
+                fontWeight: 700,
+                fontSize: '15px',
+                cursor: loading
+                  ? 'not-allowed'
+                  : 'pointer',
+                opacity: loading ? 0.6 : 1,
+              }}
+            >
+              {loading
+                ? 'Criando conta...'
+                : role === 'teacher'
+                  ? 'Enviar cadastro para aprovação'
+                  : 'Criar conta de aluno'}
+            </button>
+
+            <p
+              style={{
+                textAlign: 'center',
+                color: '#64748B',
+                fontSize: '13px',
+                marginTop: '20px',
+              }}
+            >
+              Já possui uma conta?{' '}
+              <Link
+                to="/auth/login"
+                style={{
+                  color: '#00D4FF',
+                  textDecoration: 'none',
+                  fontWeight: 600,
+                }}
+              >
+                Entrar
+              </Link>
+            </p>
+          </form>
+        </div>
+      </div>
+    );
   }
 
-  return (
-    <div style={pageStyle}>
-      <div style={cardStyle}>
-        {/* VOLTAR */}
-
-        <Link
-          to="/"
-          style={backButtonStyle}
+  function Field({
+    label,
+    icon,
+    children,
+  }: {
+    label: string;
+    icon: React.ReactNode;
+    children: React.ReactNode;
+  }) {
+    return (
+      <div
+        style={{
+          marginBottom: '18px',
+        }}
+      >
+        <label
+          style={{
+            display: 'block',
+            color: '#CBD5E1',
+            fontSize: '13px',
+            fontWeight: 600,
+            marginBottom: '7px',
+          }}
         >
-          <ArrowLeft size={16} />
-
-          Voltar
-        </Link>
-
-        {/* LOGO */}
+          {label}
+        </label>
 
         <div
           style={{
-            textAlign: 'center',
-            marginBottom: '30px',
+            position: 'relative',
           }}
         >
-          <div style={logoStyle}>
-            ⚡
-          </div>
-
-          <h1
+          <span
             style={{
-              margin:
-                '15px 0 5px',
-              fontSize: '26px',
+              position: 'absolute',
+              left: '14px',
+              top: '50%',
+              transform:
+                'translateY(-50%)',
+              color: '#64748B',
+              zIndex: 1,
             }}
           >
-            Criar conta
-          </h1>
+            {icon}
+          </span>
 
-          <p
-            style={{
-              margin: 0,
-              color: '#9CA3AF',
-              fontSize: '13px',
-            }}
-          >
-            Entre para o CODEQUEST NEXUS
-          </p>
+          {children}
         </div>
+      </div>
+    );
+  }
 
-        {/* TIPO DE CONTA */}
-
-        <div style={roleSectionStyle}>
-          <label
-            style={labelStyle}
-          >
-            Tipo de conta
-          </label>
-
-          <div
-            style={roleGridStyle}
-          >
-            <RoleButton
-              active={
-                role === 'student'
-              }
-              icon={
-                <User size={20} />
-              }
-              title="Aluno"
-              description="Aprender e completar cursos"
-              onClick={() =>
-                setRole(
-                  'student'
-                )
-              }
-            />
-
-            <RoleButton
-              active={
-                role === 'teacher'
-              }
-              icon={
-                <GraduationCap
-                  size={20}
-                />
-              }
-              title="Professor"
-              description="Criar e ensinar cursos"
-              onClick={() =>
-                setRole(
-                  'teacher'
-                )
-              }
-            />
-
-            {/*
-             * O botão de ADM NÃO aparece.
-             *
-             * O administrador será criado
-             * de forma controlada.
-             */}
-          </div>
-
-          {role === 'teacher' && (
-            <div
-              style={teacherNoticeStyle}
-            >
-              <Shield
-                size={18}
-              />
-
-              <span>
-                Contas de professor precisam
-                ser analisadas e aprovadas
-                pelo administrador.
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* FORMULÁRIO */}
-
-        <form
-          onSubmit={
-            handleSubmit
-          }
+  function RoleButton({
+    active,
+    icon,
+    title,
+    description,
+    onClick,
+  }: {
+    active: boolean;
+    icon: React.ReactNode;
+    title: string;
+    description: string;
+    onClick: () => void;
+  }) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        style={{
+          textAlign: 'left',
+          padding: '17px',
+          borderRadius: '12px',
+          border: active
+            ? '1px solid #00D4FF'
+            : '1px solid #263247',
+          background: active
+            ? 'rgba(0,212,255,0.08)'
+            : '#0B1220',
+          color: 'white',
+          cursor: 'pointer',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            gap: '12px',
+            alignItems: 'center',
+          }}
         >
-          {/* USUÁRIO */}
-
           <div
-            style={fieldStyle}
+            style={{
+              color: active
+                ? '#00D4FF'
+                : '#64748B',
+            }}
           >
-            <label
-              htmlFor="username"
-              style={labelStyle}
-            >
-              Nome de usuário
-            </label>
-
-            <input
-              id="username"
-              type="text"
-              value={username}
-              onChange={(event) =>
-                setUsername(
-                  event.target.value
-                )
-              }
-              placeholder="Como você quer ser chamado?"
-              required
-              style={inputStyle}
-            />
+            {icon}
           </div>
 
-          {/* EMAIL */}
-
-          <div
-            style={fieldStyle}
-          >
-            <label
-              htmlFor="email"
-              style={labelStyle}
-            >
-              Email
-            </label>
-
-            <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(event) =>
-                setEmail(
-                  event.target.value
-                )
-              }
-              placeholder="seu@email.com"
-              required
-              style={inputStyle}
-            />
-          </div>
-
-          {/* DADOS DO PROFESSOR */}
-
-          {role === 'teacher' && (
-            <>
-              <div
-                style={
-                  dividerStyle
-                }
-              >
-                Dados do professor
-              </div>
-
-              <div
-                style={fieldStyle}
-              >
-                <label
-                  htmlFor="teacherName"
-                  style={labelStyle}
-                >
-                  Nome completo
-                </label>
-
-                <input
-                  id="teacherName"
-                  type="text"
-                  value={
-                    teacherName
-                  }
-                  onChange={(event) =>
-                    setTeacherName(
-                      event.target
-                        .value
-                    )
-                  }
-                  placeholder="Seu nome completo"
-                  required
-                  style={inputStyle}
-                />
-              </div>
-
-              <div
-                style={fieldStyle}
-              >
-                <label
-                  htmlFor="phone"
-                  style={labelStyle}
-                >
-                  Telefone
-                </label>
-
-                <input
-                  id="phone"
-                  type="tel"
-                  value={phone}
-                  onChange={(event) =>
-                    setPhone(
-                      event.target
-                        .value
-                    )
-                  }
-                  placeholder="(00) 00000-0000"
-                  required
-                  style={inputStyle}
-                />
-              </div>
-
-              <div
-                style={fieldStyle}
-              >
-                <label
-                  htmlFor="birthDate"
-                  style={labelStyle}
-                >
-                  Data de nascimento
-                </label>
-
-                <input
-                  id="birthDate"
-                  type="date"
-                  value={
-                    birthDate
-                  }
-                  onChange={(event) =>
-                    setBirthDate(
-                      event.target
-                        .value
-                    )
-                  }
-                  required
-                  style={inputStyle}
-                />
-              </div>
-
-              <div
-                style={fieldStyle}
-              >
-                <label
-                  htmlFor="knowledgeArea"
-                  style={labelStyle}
-                >
-                  Área de conhecimento
-                </label>
-
-                <input
-                  id="knowledgeArea"
-                  type="text"
-                  value={
-                    knowledgeArea
-                  }
-                  onChange={(event) =>
-                    setKnowledgeArea(
-                      event.target
-                        .value
-                    )
-                  }
-                  placeholder="Ex.: JavaScript, Python, Design..."
-                  required
-                  style={inputStyle}
-                />
-              </div>
-
-              {/* DOCUMENTO */}
-
-              <div
-                style={fieldStyle}
-              >
-                <label
-                  style={labelStyle}
-                >
-                  Documento comprobatório
-                </label>
-
-                <label
-                  htmlFor="document"
-                  style={
-                    uploadBoxStyle
-                  }
-                >
-                  <Upload
-                    size={25}
-                  />
-
-                  <strong>
-                    {document
-                      ? document.name
-                      : 'Clique para enviar o documento'}
-                  </strong>
-
-                  <span>
-                    PDF, JPG ou PNG — máximo
-                    10 MB
-                  </span>
-                </label>
-
-                <input
-                  id="document"
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={
-                    handleDocument
-                  }
-                  style={{
-                    display:
-                      'none',
-                  }}
-                />
-              </div>
-            </>
-          )}
-
-          {/* SENHA */}
-
-          <div
-            style={fieldStyle}
-          >
-            <label
-              htmlFor="password"
-              style={labelStyle}
-            >
-              Senha
-            </label>
-
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(event) =>
-                setPassword(
-                  event.target
-                    .value
-                )
-              }
-              placeholder="Crie uma senha"
-              required
-              minLength={6}
-              style={inputStyle}
-            />
-
-            <span
+          <div>
+            <div
               style={{
-                color: '#6B7280',
-                fontSize: '11px',
+                fontWeight: 700,
+                fontSize: '14px',
               }}
             >
-              Mínimo de 6 caracteres.
-            </span>
-          </div>
-
-          {/* ERROS */}
-
-          {(localError ||
-            error) && (
-            <div
-              style={
-                errorStyle
-              }
-            >
-              {localError ||
-                error}
+              {title}
             </div>
-          )}
 
-          {/* BOTÃO */}
-
-          <button
-            type="submit"
-            disabled={loading}
-            style={{
-              ...submitButtonStyle,
-              opacity:
-                loading
-                  ? 0.6
-                  : 1,
-            }}
-          >
-            {loading
-              ? 'Criando conta...'
-              : role ===
-                'teacher'
-              ? 'Enviar cadastro para análise'
-              : 'Criar conta'}
-          </button>
-        </form>
-
-        {/* LOGIN */}
-
-        <p
-          style={{
-            textAlign:
-              'center',
-            color:
-              '#9CA3AF',
-            fontSize:
-              '13px',
-            marginTop:
-              '25px',
-          }}
-        >
-          Já possui uma conta?{' '}
-          <Link
-            to="/auth/login"
-            style={{
-              color:
-                '#00D4FF',
-              textDecoration:
-                'none',
-              fontWeight:
-                'bold',
-            }}
-          >
-            Entrar
-          </Link>
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/* =========================
-   BOTÃO DE TIPO DE CONTA
-========================= */
-
-function RoleButton({
-  active,
-  icon,
-  title,
-  description,
-  onClick,
-}: {
-  active: boolean;
- icon: ReactNode;
-  title: string;
-  description: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        padding: '16px',
-        textAlign: 'left',
-        borderRadius:
-          '10px',
-        border: active
-          ? '2px solid #00D4FF'
-          : '1px solid #374151',
-        background: active
-          ? '#0C2433'
-          : '#0F172A',
-        color: 'white',
-        cursor: 'pointer',
-      }}
-    >
-      <div
-        style={{
-          marginBottom:
-            '8px',
-          color: active
-            ? '#00D4FF'
-            : '#9CA3AF',
-        }}
-      >
-        {icon}
-      </div>
-
-      <strong
-        style={{
-          display:
-            'block',
-          marginBottom:
-            '5px',
-        }}
-      >
-        {title}
-      </strong>
-
-      <span
-        style={{
-          display:
-            'block',
-          color:
-            '#9CA3AF',
-          fontSize:
-            '11px',
-          lineHeight:
-            1.4,
-        }}
-      >
-        {description}
-      </span>
-    </button>
-  );
-}
-
-/* =========================
-   ESTILOS
-========================= */
-
-const pageStyle = {
-  minHeight: '100vh',
-  display: 'flex',
-  justifyContent: 'center',
-  alignItems: 'flex-start',
-  padding: '40px 20px',
-  background: '#050816',
-  color: 'white',
-  fontFamily: 'sans-serif',
-};
-
-const cardStyle = {
-  width: '100%',
-  maxWidth: '600px',
-  padding: '30px',
-  background: '#0B1120',
-  border: '1px solid #1F2937',
-  borderRadius: '16px',
-  boxShadow:
-    '0 20px 60px rgba(0,0,0,0.35)',
-};
-
-const backButtonStyle = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '6px',
-  color: '#9CA3AF',
-  textDecoration: 'none',
-  fontSize: '12px',
-};
-
-const logoStyle = {
-  width: '55px',
-  height: '55px',
-  margin: '0 auto',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  borderRadius: '14px',
-  background:
-    'linear-gradient(135deg, #00D4FF, #8B5CF6)',
-  fontSize: '26px',
-};
-
-const roleSectionStyle = {
-  marginBottom: '25px',
-};
-
-const labelStyle = {
-  display: 'block',
-  marginBottom: '8px',
-  color: '#D1D5DB',
-  fontSize: '12px',
-  fontWeight: 'bold',
-};
-
-const roleGridStyle = {
-  display: 'grid',
-  gridTemplateColumns:
-    'repeat(2, 1fr)',
-  gap: '10px',
-};
-
-const teacherNoticeStyle = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  gap: '10px',
-  marginTop: '12px',
-  padding: '12px',
-  background: '#172033',
-  border: '1px solid #374151',
-  borderRadius: '8px',
-  color: '#CBD5E1',
-  fontSize: '12px',
-  lineHeight: 1.5,
-};
-
-const fieldStyle = {
-  marginBottom: '18px',
-};
-
-const inputStyle = {
-  width: '100%',
-  boxSizing: 'border-box' as const,
-  padding: '12px 14px',
-  background: '#0F172A',
-  border: '1px solid #374151',
-  borderRadius: '8px',
-  color: 'white',
-  outline: 'none',
-  fontSize: '13px',
-};
-
-const dividerStyle = {
-  paddingBottom: '10px',
-  marginBottom: '20px',
-  borderBottom:
-    '1px solid #1F2937',
-  color: '#00D4FF',
-  fontSize: '13px',
-  fontWeight: 'bold',
-};
-
-const uploadBoxStyle = {
-  minHeight: '120px',
-  display: 'flex',
-  flexDirection: 'column' as const,
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: '8px',
-  padding: '15px',
-  border: '2px dashed #374151',
-  borderRadius: '10px',
-  background: '#0F172A',
-  color: '#D1D5DB',
-  cursor: 'pointer',
-  textAlign: 'center' as const,
-};
-
-const errorStyle = {
-  marginBottom: '18px',
-  padding: '12px',
-  background: '#3F1118',
-  border: '1px solid #7F1D1D',
-  borderRadius: '8px',
-  color: '#FCA5A5',
-  fontSize: '12px',
-};
-
-const submitButtonStyle = {
-  width: '100%',
-  padding: '14px',
-  border: 'none',
-  borderRadius: '9px',
-  background:
-    'linear-gradient(135deg, #00D4FF, #8B5CF6)',
-  color: 'white',
-  fontWeight: 'bold',
-  cursor: 'pointer',
-};
+            <div
+              style={{
+                color: '#64748B',
+                fontSize: '11px',
+                marginTop: '4px',
+              }}
+            >
+              {description}
+            </div>
+          </div>
+        </div>
+      </button>
+    );
+  }
