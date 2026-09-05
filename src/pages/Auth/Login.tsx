@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/useAuthStore';
 export function Login() {
   const navigate = useNavigate();
   const login = useAuthStore((s) => s.login);
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -12,13 +13,44 @@ export function Login() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
     setLoading(true);
     setError('');
+
     try {
       await login(email, password);
-      navigate('/dashboard');
-    } catch (err: any) {
-      setError(err.message || 'Erro ao entrar');
+
+      // Pega o usuário atualizado depois do login.
+      // O login já buscou o role no Firestore.
+      const loggedUser = useAuthStore.getState().user;
+
+      console.log('🔐 Usuário após login:', {
+        email: loggedUser?.email,
+        role: loggedUser?.role,
+      });
+
+      if (!loggedUser) {
+        throw new Error('Usuário não encontrado após o login.');
+      }
+
+      // Cada tipo de usuário vai para sua própria área.
+      if (loggedUser.role === 'admin') {
+        navigate('/admin', { replace: true });
+        return;
+      }
+
+      if (loggedUser.role === 'teacher') {
+        navigate('/teacher', { replace: true });
+        return;
+      }
+
+      // Alunos continuam indo para o dashboard.
+      navigate('/dashboard', { replace: true });
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : 'Erro ao entrar';
+
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -58,6 +90,7 @@ export function Login() {
         >
           CODEQUEST NEXUS
         </h1>
+
         <p
           style={{
             textAlign: 'center',
@@ -81,6 +114,7 @@ export function Login() {
             >
               Email
             </label>
+
             <input
               type="email"
               value={email}
@@ -110,6 +144,7 @@ export function Login() {
             >
               Senha
             </label>
+
             <input
               type="password"
               value={password}
@@ -174,7 +209,11 @@ export function Login() {
           Nao tem conta?{' '}
           <Link
             to="/auth/register"
-            style={{ color: '#00D4FF', textDecoration: 'none', fontWeight: 'bold' }}
+            style={{
+              color: '#00D4FF',
+              textDecoration: 'none',
+              fontWeight: 'bold',
+            }}
           >
             Criar agora
           </Link>

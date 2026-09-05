@@ -331,7 +331,9 @@ export const useAuthStore = create<AuthState>()(
             }
 
             /*
+             * =========================================
              * CRIA A CONTA NO FIREBASE AUTH
+             * =========================================
              */
             const result =
               await createUserWithEmailAndPassword(
@@ -341,7 +343,9 @@ export const useAuthStore = create<AuthState>()(
               );
 
             /*
+             * =========================================
              * DEFINE O NOME DO USUÁRIO
+             * =========================================
              */
             await updateProfile(
               result.user,
@@ -352,7 +356,20 @@ export const useAuthStore = create<AuthState>()(
             );
 
             /*
-             * CRIA O OBJETO BASE DO USUÁRIO
+             * =========================================
+             * CRIA O USUÁRIO
+             * =========================================
+             *
+             * IMPORTANTE:
+             * data.role é mantido aqui.
+             *
+             * Se o cadastro for teacher:
+             *
+             * role = "teacher"
+             *
+             * Se for student:
+             *
+             * role = "student"
              */
             const user = criarUsuario(
               result.user.uid,
@@ -362,7 +379,9 @@ export const useAuthStore = create<AuthState>()(
             );
 
             /*
+             * =========================================
              * DADOS DA COLEÇÃO USERS
+             * =========================================
              */
             const firebaseUserData: Record<
               string,
@@ -370,7 +389,15 @@ export const useAuthStore = create<AuthState>()(
             > = {
               ...user,
 
+              /*
+               * GARANTE O ROLE CORRETO
+               */
               role: data.role,
+
+              /*
+               * GARANTE O EMAIL
+               */
+              email: data.email,
 
               createdAt:
                 serverTimestamp(),
@@ -380,29 +407,13 @@ export const useAuthStore = create<AuthState>()(
              * =========================================
              * PROFESSOR
              * =========================================
-             *
-             * O usuário continua sendo criado em:
-             *
-             * users/{uid}
-             *
-             * E agora também será criado em:
-             *
-             * teachers/{uid}
              */
             if (
               data.role === 'teacher'
             ) {
-              /*
-               * Mantemos essas informações em users
-               * por compatibilidade com o sistema atual.
-               */
               firebaseUserData.teacherStatus =
                 'pending';
 
-              /*
-               * Se houver formulário de professor,
-               * criamos o documento na coleção teachers.
-               */
               if (
                 data.teacherApplication
               ) {
@@ -410,15 +421,29 @@ export const useAuthStore = create<AuthState>()(
                   data.teacherApplication;
 
                 /*
-                 * DADOS DO PROFESSOR
+                 * =====================================
+                 * DADOS DA COLEÇÃO TEACHERS
+                 * =====================================
                  */
                 const teacherData: Record<
                   string,
                   unknown
                 > = {
+                  /*
+                   * IDENTIFICAÇÃO
+                   */
                   userId:
                     result.user.uid,
 
+                  /*
+                   * EMAIL DO PROFESSOR
+                   */
+                  email:
+                    data.email,
+
+                  /*
+                   * DADOS DO FORMULÁRIO
+                   */
                   name:
                     teacher.name,
 
@@ -431,13 +456,22 @@ export const useAuthStore = create<AuthState>()(
                   knowledgeArea:
                     teacher.knowledgeArea,
 
+                  /*
+                   * STATUS PADRONIZADO
+                   */
                   status:
                     'pending',
 
+                  /*
+                   * DOCUMENTO
+                   */
                   documentName:
                     teacher.document?.name ||
                     '',
 
+                  /*
+                   * DATAS
+                   */
                   createdAt:
                     serverTimestamp(),
 
@@ -445,25 +479,51 @@ export const useAuthStore = create<AuthState>()(
                     serverTimestamp(),
                 };
 
-                /*
-                 * CRIA:
-                 *
-                 * teachers/{UID_DO_PROFESSOR}
-                 */
-                await setDoc(
-                  doc(
-                    db,
-                    'teachers',
-                    result.user.uid
-                  ),
-                  teacherData
+                console.log(
+                  '🟡 Tentando criar professor no Firestore:',
+                  {
+                    uid:
+                      result.user.uid,
+                    email:
+                      data.email,
+                    role:
+                      data.role,
+                    teacherData,
+                  }
                 );
 
+                try {
+                  console.log(
+                    '🔵 Executando setDoc em teachers...'
+                  );
+
+                  await setDoc(
+                    doc(
+                      db,
+                      'teachers',
+                      result.user.uid
+                    ),
+                    teacherData
+                  );
+
+                  console.log(
+                    '🟢 Professor criado no Firestore!'
+                  );
+                } catch (
+                  firestoreError: unknown
+                ) {
+                  console.error(
+                    '🔴 ERRO AO CRIAR PROFESSOR NO FIRESTORE:',
+                    firestoreError
+                  );
+
+                  throw firestoreError;
+                }
+
                 /*
-                 * Também mantemos uma cópia
-                 * resumida da candidatura em users
-                 * por enquanto, para não quebrar
-                 * nenhuma parte existente.
+                 * =====================================
+                 * CÓPIA DA CANDIDATURA EM USERS
+                 * =====================================
                  */
                 firebaseUserData.teacherApplication =
                   {
@@ -491,9 +551,21 @@ export const useAuthStore = create<AuthState>()(
 
             /*
              * =========================================
-             * SALVA O USUÁRIO
+             * SALVA USERS/{UID}
              * =========================================
              */
+            console.log(
+              '🟡 Salvando usuário no Firestore:',
+              {
+                uid:
+                  result.user.uid,
+                email:
+                  data.email,
+                role:
+                  data.role,
+              }
+            );
+
             await setDoc(
               doc(
                 db,
@@ -501,6 +573,16 @@ export const useAuthStore = create<AuthState>()(
                 result.user.uid
               ),
               firebaseUserData
+            );
+
+            console.log(
+              '🟢 Usuário salvo no Firestore:',
+              {
+                uid:
+                  result.user.uid,
+                role:
+                  data.role,
+              }
             );
 
             set({

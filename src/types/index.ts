@@ -42,6 +42,10 @@ export interface User {
 
   role: UserRole;
 
+  teacherStatus?: TeacherStatus;
+
+  rejectionReason?: string;
+
   level: number;
   xp: number;
   currentStreak: number;
@@ -126,6 +130,7 @@ export interface TeacherApplication {
   knowledgeArea: string;
 
   documentUrl: string;
+  documentName?: string;
 
   status: TeacherStatus;
 
@@ -136,14 +141,6 @@ export interface TeacherApplication {
   rejectionReason?: string;
 }
 
-/*
- * Cada página de um curso.
- *
- * Pode ser:
- * - PDF
- * - Vídeo
- * - Questionário
- */
 export interface Lesson {
   id: string;
 
@@ -157,21 +154,8 @@ export interface Lesson {
   pdfUrl?: string;
   videoUrl?: string;
 
-  /*
-   * Caso exista código dentro da aula.
-   * O sistema poderá mostrar esse código
-   * em uma caixa com botão "Copiar".
-   */
   codeExample?: string;
 
-  /*
-   * Exemplos:
-   * html
-   * css
-   * javascript
-   * typescript
-   * python
-   */
   language?: string;
 
   duration: number;
@@ -179,9 +163,6 @@ export interface Lesson {
   xpReward: number;
 }
 
-/*
- * Curso criado pelo professor.
- */
 export interface Course {
   id: string;
 
@@ -195,13 +176,19 @@ export interface Course {
 
   color: string;
 
-  /*
-   * Quantas pessoas visitaram o curso.
-   */
   views: number;
 
-  /*
-   * Todas as páginas do curso.
-   */
   lessons: Lesson[];
+
+  teacherId?: string;
+
+  published?: boolean;
+
+  averageRating?: number;
+
+  ratingsCount?: number;
+
+  createdAt?: string;
+
+  updatedAt?: string;
 }
