@@ -1,4 +1,4 @@
-import {
+import React, {
   useEffect,
   useMemo,
   useState,
@@ -6,6 +6,7 @@ import {
 
 import {
   collection,
+  deleteDoc,
   doc,
   onSnapshot,
   query,
@@ -17,10 +18,7 @@ import {
 import { db } from '@/lib/firebase';
 import { useAuthStore } from '@/stores/useAuthStore';
 
-type LessonType =
-  | 'pdf'
-  | 'video'
-  | 'quiz';
+type LessonType = 'pdf' | 'video' | 'quiz';
 
 interface Lesson {
   id: string;
@@ -30,6 +28,12 @@ interface Lesson {
   content: string;
   duration: number;
   xpReward: number;
+
+  fileName?: string;
+  fileUrl?: string;
+  fileSize?: number;
+  fileType?: string;
+  uploadedAt?: string;
 }
 
 interface Course {
@@ -59,19 +63,213 @@ type ActiveTab =
   | 'create'
   | 'score';
 
-export function TeacherDashboard() {
-  const user = useAuthStore(
-    (state) => state.user
+/*
+ * O Firestore possui limite de aproximadamente 1 MiB por documento.
+ *
+ * Como os PDFs serão armazenados como Data URL dentro do próprio
+ * documento do curso, usamos limites conservadores para evitar
+ * estourar o tamanho do documento.
+ */
+const MAX_PDF_SIZE = 350 * 1024;
+const MAX_TOTAL_EMBEDDED_SIZE = 700 * 1024;
+
+function normalizeStatus(
+  value: unknown
+): TeacherStatus {
+  const status = String(value ?? '')
+    .trim()
+    .toLowerCase();
+
+  if (
+    status === 'approved' ||
+    status === 'aprovado'
+  ) {
+    return 'approved';
+  }
+
+  if (
+    status === 'rejected' ||
+    status === 'rejeitado'
+  ) {
+    return 'rejected';
+  }
+
+  return 'pending';
+}
+
+function createSlug(value: string) {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function formatFileSize(
+  bytes?: number
+) {
+  if (!bytes) {
+    return '';
+  }
+
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+
+  return `${(
+    bytes /
+    (1024 * 1024)
+  ).toFixed(1)} MB`;
+}
+
+function getAverageRating(
+  course: Course
+) {
+  if (
+    !course.ratingsCount ||
+    course.ratingsCount <= 0
+  ) {
+    return '0.0';
+  }
+
+  return course.averageRating.toFixed(1);
+}
+
+function isDataUrl(
+  value?: string
+) {
+  return Boolean(
+    value &&
+      value.startsWith('data:')
   );
+}
+
+function serializeLesson(
+  lesson: Lesson
+) {
+  const result: Record<
+    string,
+    unknown
+  > = {
+    id: lesson.id,
+    title: lesson.title,
+    description: lesson.description,
+    type: lesson.type,
+    content: lesson.content,
+    duration: lesson.duration,
+    xpReward: lesson.xpReward,
+  };
+
+  if (lesson.fileName) {
+    result.fileName = lesson.fileName;
+  }
+
+  if (lesson.fileUrl) {
+    result.fileUrl = lesson.fileUrl;
+  }
+
+  if (
+    typeof lesson.fileSize ===
+    'number'
+  ) {
+    result.fileSize =
+      lesson.fileSize;
+  }
+
+  if (lesson.fileType) {
+    result.fileType =
+      lesson.fileType;
+  }
+
+  if (lesson.uploadedAt) {
+    result.uploadedAt =
+      lesson.uploadedAt;
+  }
+
+  return result;
+}
+
+function getEmbeddedSize(
+  lessons: Lesson[]
+) {
+  return lessons.reduce(
+    (total, lesson) => {
+      if (
+        isDataUrl(lesson.fileUrl)
+      ) {
+        return (
+          total +
+          lesson.fileUrl!.length
+        );
+      }
+
+      return total;
+    },
+    0
+  );
+}
+
+function readFileAsDataUrl(
+  file: File
+): Promise<string> {
+  return new Promise(
+    (resolve, reject) => {
+      const reader =
+        new FileReader();
+
+      reader.onload = () => {
+        if (
+          typeof reader.result ===
+          'string'
+        ) {
+          resolve(
+            reader.result
+          );
+        } else {
+          reject(
+            new Error(
+              'Não foi possível ler o arquivo.'
+            )
+          );
+        }
+      };
+
+      reader.onerror = () => {
+        reject(
+          new Error(
+            'Erro ao ler o arquivo.'
+          )
+        );
+      };
+
+      reader.readAsDataURL(file);
+    }
+  );
+}
+
+export function TeacherDashboard() {
+  const { user } =
+    useAuthStore();
 
   const [teacherStatus, setTeacherStatus] =
-    useState<TeacherStatus>('pending');
+    useState<TeacherStatus>(
+      'pending'
+    );
 
   const [courses, setCourses] =
     useState<Course[]>([]);
 
-  const [selectedCourseId, setSelectedCourseId] =
-    useState<string | null>(null);
+  const [
+    selectedCourseId,
+    setSelectedCourseId,
+  ] = useState<string | null>(
+    null
+  );
 
   const [activeTab, setActiveTab] =
     useState<ActiveTab>('courses');
@@ -84,86 +282,48 @@ export function TeacherDashboard() {
     setNewCourseDescription,
   ] = useState('');
 
-  const [loadingApproval, setLoadingApproval] =
-    useState(true);
+  const [
+    loadingApproval,
+    setLoadingApproval,
+  ] = useState(true);
 
-  const [loadingCourses, setLoadingCourses] =
-    useState(false);
+  const [
+    loadingCourses,
+    setLoadingCourses,
+  ] = useState(true);
 
   const [creating, setCreating] =
     useState(false);
 
-  const selectedCourse = useMemo(
-    () =>
-      courses.find(
-        (course) =>
-          course.id === selectedCourseId
-      ) || null,
-    [courses, selectedCourseId]
-  );
+  const [
+    deletingCourse,
+    setDeletingCourse,
+  ] = useState(false);
 
-  const approved =
-    teacherStatus === 'approved';
+  const selectedCourse =
+    useMemo(() => {
+      return (
+        courses.find(
+          (course) =>
+            course.id ===
+            selectedCourseId
+        ) ?? null
+      );
+    }, [
+      courses,
+      selectedCourseId,
+    ]);
 
-  // =========================================================
-  // ACOMPANHA A APROVAÇÃO EM TEMPO REAL
-  // =========================================================
-  //
-  // O administrador pode ter salvo:
-  //
-  // teachers/{UID}.status = "approved"
-  //
-  // ou:
-  //
-  // users/{UID}.teacherStatus = "approved"
-  //
-  // Aceitamos os dois para evitar que o professor
-  // fique preso em "Aguardando aprovação".
-  //
+  /*
+   * Verifica aprovação do professor.
+   */
   useEffect(() => {
-    if (!user || !db) {
-      setTeacherStatus('pending');
+    if (!user?.id || !db) {
+      setTeacherStatus(
+        'pending'
+      );
       setLoadingApproval(false);
       return;
-    }
-
-    setLoadingApproval(true);
-
-    let teacherStatus: TeacherStatus = 'pending';
-    let userTeacherStatus: TeacherStatus = 'pending';
-
-    let teacherDocumentExists = false;
-    let userDocumentExists = false;
-
-    function applyApprovalStatus() {
-      /*
-       * Se qualquer uma das duas fontes estiver aprovada,
-       * consideramos o professor aprovado.
-       *
-       * Isso também resolve o caso em que o Admin alterou
-       * somente users.teacherStatus.
-       */
-      if (
-        teacherStatus === 'approved' ||
-        userTeacherStatus === 'approved'
-      ) {
-        setTeacherStatus('approved');
-        return;
-      }
-
-      /*
-       * Se nenhuma estiver aprovada, mas uma estiver recusada,
-       * mostramos recusado.
-       */
-      if (
-        teacherStatus === 'rejected' ||
-        userTeacherStatus === 'rejected'
-      ) {
-        setTeacherStatus('rejected');
-        return;
-      }
-
-      setTeacherStatus('pending');
     }
 
     const teacherRef = doc(
@@ -178,94 +338,97 @@ export function TeacherDashboard() {
       user.id
     );
 
-    const unsubscribeTeacher = onSnapshot(
-      teacherRef,
-      (snapshot) => {
-        teacherDocumentExists =
-          snapshot.exists();
+    let teacherStatusValue:
+      | TeacherStatus
+      | null = null;
 
-        if (snapshot.exists()) {
-          const data =
-            snapshot.data();
+    let userStatusValue:
+      | TeacherStatus
+      | null = null;
 
-          teacherStatus =
-            normalizeStatus(
-              data.status ??
+    const updateStatus = () => {
+      if (
+        teacherStatusValue ===
+          'approved' ||
+        userStatusValue ===
+          'approved'
+      ) {
+        setTeacherStatus(
+          'approved'
+        );
+        setLoadingApproval(false);
+        return;
+      }
+
+      if (
+        teacherStatusValue ===
+          'rejected' ||
+        userStatusValue ===
+          'rejected'
+      ) {
+        setTeacherStatus(
+          'rejected'
+        );
+        setLoadingApproval(false);
+        return;
+      }
+
+      setTeacherStatus(
+        'pending'
+      );
+      setLoadingApproval(false);
+    };
+
+    const unsubscribeTeacher =
+      onSnapshot(
+        teacherRef,
+        (snapshot) => {
+          if (
+            snapshot.exists()
+          ) {
+            const data =
+              snapshot.data();
+
+            teacherStatusValue =
+              normalizeStatus(
+                data.status
+              );
+          }
+
+          updateStatus();
+        },
+        () => {
+          teacherStatusValue =
+            null;
+          updateStatus();
+        }
+      );
+
+    const unsubscribeUser =
+      onSnapshot(
+        userRef,
+        (snapshot) => {
+          if (
+            snapshot.exists()
+          ) {
+            const data =
+              snapshot.data();
+
+            userStatusValue =
+              normalizeStatus(
                 data.teacherStatus ??
-                'pending'
-            );
-        } else {
-          teacherStatus = 'pending';
+                  data.status
+              );
+          }
+
+          updateStatus();
+        },
+        () => {
+          userStatusValue =
+            null;
+          updateStatus();
         }
-
-        applyApprovalStatus();
-
-        if (
-          teacherDocumentExists ||
-          userDocumentExists
-        ) {
-          setLoadingApproval(false);
-        }
-      },
-      (error) => {
-        console.error(
-          'Erro ao acompanhar cadastro do professor:',
-          error
-        );
-
-        teacherStatus = 'pending';
-
-        applyApprovalStatus();
-
-        if (userDocumentExists) {
-          setLoadingApproval(false);
-        }
-      }
-    );
-
-    const unsubscribeUser = onSnapshot(
-      userRef,
-      (snapshot) => {
-        userDocumentExists =
-          snapshot.exists();
-
-        if (snapshot.exists()) {
-          const data =
-            snapshot.data();
-
-          userTeacherStatus =
-            normalizeStatus(
-              data.teacherStatus ??
-                'pending'
-            );
-        } else {
-          userTeacherStatus = 'pending';
-        }
-
-        applyApprovalStatus();
-
-        if (
-          teacherDocumentExists ||
-          userDocumentExists
-        ) {
-          setLoadingApproval(false);
-        }
-      },
-      (error) => {
-        console.error(
-          'Erro ao acompanhar status do usuário:',
-          error
-        );
-
-        userTeacherStatus = 'pending';
-
-        applyApprovalStatus();
-
-        if (teacherDocumentExists) {
-          setLoadingApproval(false);
-        }
-      }
-    );
+      );
 
     return () => {
       unsubscribeTeacher();
@@ -273,15 +436,15 @@ export function TeacherDashboard() {
     };
   }, [user?.id]);
 
-  // =========================================================
-  // CARREGA OS CURSOS DO PROFESSOR EM TEMPO REAL
-  // =========================================================
-
+  /*
+   * Carrega cursos do professor.
+   */
   useEffect(() => {
     if (
-      !user ||
+      !user?.id ||
       !db ||
-      teacherStatus !== 'approved'
+      teacherStatus !==
+        'approved'
     ) {
       setCourses([]);
       setLoadingCourses(false);
@@ -290,178 +453,186 @@ export function TeacherDashboard() {
 
     setLoadingCourses(true);
 
-    const coursesQuery = query(
+    const coursesRef =
       collection(
         db,
         'courses'
-      ),
-      where(
-        'teacherId',
-        '==',
-        user.id
-      )
-    );
+      );
 
-    const unsubscribe = onSnapshot(
-      coursesQuery,
-      (snapshot) => {
-        const loadedCourses: Course[] =
-          snapshot.docs.map(
-            (item) => {
-              const data =
-                item.data();
+    const coursesQuery =
+      query(
+        coursesRef,
+        where(
+          'teacherId',
+          '==',
+          user.id
+        )
+      );
 
-              return {
-                id: item.id,
+    const unsubscribe =
+      onSnapshot(
+        coursesQuery,
+        (snapshot) => {
+          const loadedCourses =
+            snapshot.docs.map(
+              (item) => {
+                const data =
+                  item.data();
 
-                slug:
-                  String(
-                    data.slug ??
-                      item.id
-                  ),
-
-                name:
-                  String(
-                    data.name ??
-                      data.title ??
-                      'Curso sem nome'
-                  ),
-
-                description:
-                  String(
-                    data.description ??
-                      ''
-                  ),
-
-                icon:
-                  String(
-                    data.icon ??
-                      '📚'
-                  ),
-
-                color:
-                  String(
-                    data.color ??
-                      '#00D4FF'
-                  ),
-
-                views:
-                  Number(
-                    data.views ??
-                      0
-                  ),
-
-                lessons:
+                const lessons =
                   Array.isArray(
                     data.lessons
                   )
-                    ? data.lessons as Lesson[]
-                    : [],
+                    ? data.lessons.map(
+                        (
+                          lesson: any
+                        ) => ({
+                          id: String(
+                            lesson.id ??
+                              Date.now()
+                          ),
+                          title:
+                            String(
+                              lesson.title ??
+                                ''
+                            ),
+                          description:
+                            String(
+                              lesson.description ??
+                                ''
+                            ),
+                          type:
+                            lesson.type ===
+                              'video' ||
+                            lesson.type ===
+                              'quiz'
+                              ? lesson.type
+                              : 'pdf',
+                          content:
+                            String(
+                              lesson.content ??
+                                ''
+                            ),
+                          duration:
+                            Number(
+                              lesson.duration ??
+                                0
+                            ),
+                          xpReward:
+                            Number(
+                              lesson.xpReward ??
+                                10
+                            ),
+                          fileName:
+                            lesson.fileName,
+                          fileUrl:
+                            lesson.fileUrl,
+                          fileSize:
+                            typeof lesson.fileSize ===
+                            'number'
+                              ? lesson.fileSize
+                              : undefined,
+                          fileType:
+                            lesson.fileType,
+                          uploadedAt:
+                            lesson.uploadedAt,
+                        })
+                      )
+                    : [];
 
-                teacherId:
-                  String(
-                    data.teacherId ??
+                return {
+                  id: item.id,
+                  slug: String(
+                    data.slug ??
+                      createSlug(
+                        data.name ??
+                          'curso'
+                      )
+                  ),
+                  name: String(
+                    data.name ??
                       ''
                   ),
-
-                published:
-                  data.published ===
-                  true,
-
-                averageRating:
-                  Number(
-                    data.averageRating ??
-                      data.rating ??
-                      0
+                  description:
+                    String(
+                      data.description ??
+                        ''
+                    ),
+                  icon: String(
+                    data.icon ??
+                      '📚'
                   ),
-
-                ratingsCount:
-                  Number(
-                    data.ratingsCount ??
-                      data.ratingCount ??
-                      0
+                  color: String(
+                    data.color ??
+                      '#00D4FF'
                   ),
+                  views: Number(
+                    data.views ?? 0
+                  ),
+                  lessons,
+                  teacherId:
+                    String(
+                      data.teacherId ??
+                        ''
+                    ),
+                  published:
+                    Boolean(
+                      data.published
+                    ),
+                  averageRating:
+                    Number(
+                      data.averageRating ??
+                        0
+                    ),
+                  ratingsCount:
+                    Number(
+                      data.ratingsCount ??
+                        0
+                    ),
+                  createdAt:
+                    data.createdAt,
+                  updatedAt:
+                    data.updatedAt,
+                };
+              }
+            );
 
-                createdAt:
-                  data.createdAt,
-
-                updatedAt:
-                  data.updatedAt,
-              };
-            }
+          setCourses(
+            loadedCourses
           );
+          setLoadingCourses(false);
 
-        setCourses(
-          loadedCourses
-        );
-
-        setSelectedCourseId(
-          (currentSelectedId) => {
-            if (
-              loadedCourses.length ===
-              0
-            ) {
-              return null;
-            }
-
-            if (
-              currentSelectedId &&
-              loadedCourses.some(
-                (course) =>
-                  course.id ===
-                  currentSelectedId
-              )
-            ) {
-              return currentSelectedId;
-            }
-
-            return loadedCourses[0].id;
+          if (
+            selectedCourseId &&
+            !loadedCourses.some(
+              (course) =>
+                course.id ===
+                selectedCourseId
+            )
+          ) {
+            setSelectedCourseId(
+              null
+            );
           }
-        );
+        },
+        () => {
+          setLoadingCourses(false);
+        }
+      );
 
-        setLoadingCourses(false);
-      },
-      (error) => {
-        console.error(
-          'Erro ao carregar cursos do professor:',
-          error
-        );
-
-        setCourses([]);
-        setLoadingCourses(false);
-      }
-    );
-
-    return () => {
-      unsubscribe();
-    };
+    return unsubscribe;
   }, [
     user?.id,
     teacherStatus,
+    selectedCourseId,
   ]);
 
-  // =========================================================
-  // CRIAR CURSO
-  // =========================================================
-
   async function createCourse() {
-    if (!approved) {
-      alert(
-        'Seu cadastro ainda não foi aprovado pelo administrador.'
-      );
-      return;
-    }
-
     if (
+      !user?.id ||
+      !db ||
       !newCourseTitle.trim()
     ) {
-      alert(
-        'Digite o nome do curso.'
-      );
-      return;
-    }
-
-    if (!user || !db) {
       return;
     }
 
@@ -471,57 +642,35 @@ export function TeacherDashboard() {
       const courseId =
         `${user.id}-${Date.now()}`;
 
-      const slug =
-        createSlug(
+      const course: Course = {
+        id: courseId,
+        slug: createSlug(
           newCourseTitle
-        );
-
-      const course = {
-        slug,
-
+        ),
         name:
           newCourseTitle.trim(),
-
         description:
-          newCourseDescription.trim() ||
-          'Novo curso criado pelo professor.',
-
-        icon:
-          '📚',
-
-        color:
-          '#00D4FF',
-
-        views:
-          0,
-
+          newCourseDescription.trim(),
+        icon: '📚',
+        color: '#00D4FF',
+        views: 0,
         lessons: [
           {
             id: '1',
             title: 'Página 1',
             description: '',
-            type: 'pdf' as LessonType,
+            type: 'pdf',
             content: '',
             duration: 0,
             xpReward: 10,
           },
         ],
-
-        teacherId:
-          user.id,
-
-        published:
-          false,
-
-        averageRating:
-          0,
-
-        ratingsCount:
-          0,
-
+        teacherId: user.id,
+        published: false,
+        averageRating: 0,
+        ratingsCount: 0,
         createdAt:
           serverTimestamp(),
-
         updatedAt:
           serverTimestamp(),
       };
@@ -532,16 +681,29 @@ export function TeacherDashboard() {
           'courses',
           courseId
         ),
-        course
+        {
+          ...course,
+          lessons:
+            course.lessons.map(
+              serializeLesson
+            ),
+          createdAt:
+            serverTimestamp(),
+          updatedAt:
+            serverTimestamp(),
+        }
       );
+
+      setNewCourseTitle('');
+      setNewCourseDescription('');
 
       setSelectedCourseId(
         courseId
       );
 
-      setNewCourseTitle('');
-      setNewCourseDescription('');
-      setActiveTab('courses');
+      setActiveTab(
+        'courses'
+      );
     } catch (error) {
       console.error(
         'Erro ao criar curso:',
@@ -549,38 +711,17 @@ export function TeacherDashboard() {
       );
 
       alert(
-        'Não foi possível criar o curso. Verifique se o administrador aprovou seu cadastro.'
+        'Não foi possível criar o curso.'
       );
     } finally {
       setCreating(false);
     }
   }
 
-  // =========================================================
-  // SALVAR CURSO
-  // =========================================================
-
   async function saveCourse(
     course: Course
   ) {
-    if (!approved) {
-      alert(
-        'Você precisa ser aprovado pelo administrador para publicar conteúdo.'
-      );
-      return;
-    }
-
-    if (!db || !user) {
-      return;
-    }
-
-    if (
-      course.teacherId !==
-      user.id
-    ) {
-      alert(
-        'Você não pode alterar este curso.'
-      );
+    if (!db || !user?.id) {
       return;
     }
 
@@ -592,39 +733,387 @@ export function TeacherDashboard() {
           course.id
         ),
         {
-          slug:
-            course.slug,
-
-          name:
-            course.name,
-
+          name: course.name,
+          slug: course.slug,
           description:
             course.description,
-
-          icon:
-            course.icon,
-
-          color:
-            course.color,
-
-          views:
-            course.views,
-
+          icon: course.icon,
+          color: course.color,
+          views: course.views,
           lessons:
-            course.lessons,
-
+            course.lessons.map(
+              serializeLesson
+            ),
           teacherId:
             course.teacherId,
-
           published:
             course.published,
-
           averageRating:
             course.averageRating,
-
           ratingsCount:
             course.ratingsCount,
+          updatedAt:
+            serverTimestamp(),
+        },
+        {
+          merge: true,
+        }
+      );
+    } catch (error) {
+      console.error(
+        'Erro ao salvar curso:',
+        error
+      );
 
+      throw error;
+    }
+  }
+
+  function updateCourse(
+    courseId: string,
+    changes: Partial<Course>
+  ) {
+    setCourses((current) =>
+      current.map((course) =>
+        course.id === courseId
+          ? {
+              ...course,
+              ...changes,
+            }
+          : course
+      )
+    );
+  }
+
+  function updateLesson(
+    courseId: string,
+    lessonId: string,
+    changes: Partial<Lesson>
+  ) {
+    setCourses((current) =>
+      current.map((course) => {
+        if (
+          course.id !==
+          courseId
+        ) {
+          return course;
+        }
+
+        return {
+          ...course,
+          lessons:
+            course.lessons.map(
+              (lesson) =>
+                lesson.id ===
+                lessonId
+                  ? {
+                      ...lesson,
+                      ...changes,
+                    }
+                  : lesson
+            ),
+        };
+      })
+    );
+  }
+
+  async function saveLessonChanges(
+    courseId: string,
+    lesson: Lesson
+  ) {
+    if (!db) {
+      return;
+    }
+
+    const course =
+      courses.find(
+        (item) =>
+          item.id === courseId
+      );
+
+    if (!course) {
+      return;
+    }
+
+    const updatedLessons =
+      course.lessons.map(
+        (item) =>
+          item.id === lesson.id
+            ? lesson
+            : item
+      );
+
+    try {
+      await setDoc(
+        doc(
+          db,
+          'courses',
+          courseId
+        ),
+        {
+          lessons:
+            updatedLessons.map(
+              serializeLesson
+            ),
+          updatedAt:
+            serverTimestamp(),
+        },
+        {
+          merge: true,
+        }
+      );
+
+      setCourses((current) =>
+        current.map(
+          (item) =>
+            item.id === courseId
+              ? {
+                  ...item,
+                  lessons:
+                    updatedLessons,
+                }
+              : item
+        )
+      );
+
+      alert(
+        'Aula salva com sucesso!'
+      );
+    } catch (error) {
+      console.error(
+        'Erro ao salvar aula:',
+        error
+      );
+
+      alert(
+        'Não foi possível salvar a aula.'
+      );
+    }
+  }
+
+  async function addLesson(
+    courseId: string
+  ) {
+    const course =
+      courses.find(
+        (item) =>
+          item.id === courseId
+      );
+
+    if (!course) {
+      return;
+    }
+
+    const newLesson: Lesson = {
+      id: String(
+        Date.now()
+      ),
+      title: `Aula ${
+        course.lessons.length + 1
+      }`,
+      description: '',
+      type: 'pdf',
+      content: '',
+      duration: 0,
+      xpReward: 10,
+    };
+
+    const updatedLessons = [
+      ...course.lessons,
+      newLesson,
+    ];
+
+    setCourses((current) =>
+      current.map((item) =>
+        item.id === courseId
+          ? {
+              ...item,
+              lessons:
+                updatedLessons,
+            }
+          : item
+      )
+    );
+
+    if (!db) {
+      return;
+    }
+
+    try {
+      await setDoc(
+        doc(
+          db,
+          'courses',
+          courseId
+        ),
+        {
+          lessons:
+            updatedLessons.map(
+              serializeLesson
+            ),
+          updatedAt:
+            serverTimestamp(),
+        },
+        {
+          merge: true,
+        }
+      );
+    } catch (error) {
+      console.error(
+        'Erro ao adicionar aula:',
+        error
+      );
+    }
+  }
+
+  async function uploadLessonFile(
+    courseId: string,
+    lesson: Lesson,
+    file: File
+  ) {
+    if (!db) {
+      alert(
+        'Firebase não está conectado.'
+      );
+      return;
+    }
+
+    if (
+      lesson.type !== 'pdf'
+    ) {
+      alert(
+        'Para vídeos, use um link externo do YouTube, Vimeo ou outra plataforma.'
+      );
+      return;
+    }
+
+    if (
+      file.type !==
+        'application/pdf' &&
+      !file.name
+        .toLowerCase()
+        .endsWith('.pdf')
+    ) {
+      alert(
+        'Envie somente arquivos PDF.'
+      );
+      return;
+    }
+
+    if (
+      file.size >
+      MAX_PDF_SIZE
+    ) {
+      alert(
+        `Esse PDF é muito grande. O limite é ${formatFileSize(
+          MAX_PDF_SIZE
+        )} para este modo gratuito.`
+      );
+      return;
+    }
+
+    const course =
+      courses.find(
+        (item) =>
+          item.id === courseId
+      );
+
+    if (!course) {
+      return;
+    }
+
+    try {
+      const dataUrl =
+        await readFileAsDataUrl(
+          file
+        );
+
+      const lessonsWithoutCurrent =
+        course.lessons.map(
+          (item) => {
+            if (
+              item.id !==
+              lesson.id
+            ) {
+              return item;
+            }
+
+            const {
+              fileName,
+              fileUrl,
+              fileSize,
+              fileType,
+              uploadedAt,
+              ...rest
+            } = item;
+
+            return rest;
+          }
+        );
+
+      const currentEmbeddedSize =
+        getEmbeddedSize(
+          lessonsWithoutCurrent
+        );
+
+      if (
+        currentEmbeddedSize +
+          dataUrl.length >
+        MAX_TOTAL_EMBEDDED_SIZE
+      ) {
+        alert(
+          'O curso já possui muitos arquivos armazenados. Remova algum PDF antigo antes de adicionar outro.'
+        );
+        return;
+      }
+
+      const updatedLesson: Lesson =
+        {
+          ...lesson,
+          fileName:
+            file.name,
+          fileUrl:
+            dataUrl,
+          fileSize:
+            file.size,
+          fileType:
+            'application/pdf',
+          uploadedAt:
+            new Date().toISOString(),
+        };
+
+      const updatedLessons =
+        course.lessons.map(
+          (item) =>
+            item.id ===
+            lesson.id
+              ? updatedLesson
+              : item
+        );
+
+      setCourses((current) =>
+        current.map((item) =>
+          item.id === courseId
+            ? {
+                ...item,
+                lessons:
+                  updatedLessons,
+              }
+            : item
+        )
+      );
+
+      await setDoc(
+        doc(
+          db,
+          'courses',
+          courseId
+        ),
+        {
+          lessons:
+            updatedLessons.map(
+              serializeLesson
+            ),
           updatedAt:
             serverTimestamp(),
         },
@@ -634,1232 +1123,1075 @@ export function TeacherDashboard() {
       );
 
       alert(
-        'Curso salvo com sucesso!'
+        'PDF anexado com sucesso!'
       );
     } catch (error) {
       console.error(
-        'Erro ao salvar curso:',
+        'Erro ao anexar PDF:',
         error
       );
 
       alert(
-        'Não foi possível salvar o curso.'
+        'Não foi possível anexar o PDF.'
       );
     }
   }
 
-  // =========================================================
-  // ATUALIZA CURSO LOCALMENTE
-  // =========================================================
-
-  function updateCourse(
+  async function removeLessonFile(
     courseId: string,
-    changes: Partial<Course>
+    lessonId: string
   ) {
-    if (!approved) {
-      alert(
-        'A publicação está bloqueada até a aprovação do administrador.'
+    const course =
+      courses.find(
+        (item) =>
+          item.id === courseId
       );
+
+    if (!course) {
       return;
     }
 
-    setCourses(
-      (current) =>
-        current.map(
-          (course) =>
-            course.id ===
-            courseId
-              ? {
-                  ...course,
-                  ...changes,
-                }
-              : course
-        )
+    const updatedLessons =
+      course.lessons.map(
+        (lesson) => {
+          if (
+            lesson.id !==
+            lessonId
+          ) {
+            return lesson;
+          }
+
+          const {
+            fileName,
+            fileUrl,
+            fileSize,
+            fileType,
+            uploadedAt,
+            ...rest
+          } = lesson;
+
+          return rest;
+        }
+      );
+
+    setCourses((current) =>
+      current.map((item) =>
+        item.id === courseId
+          ? {
+              ...item,
+              lessons:
+                updatedLessons,
+            }
+          : item
+      )
     );
+
+    if (!db) {
+      return;
+    }
+
+    try {
+      await setDoc(
+        doc(
+          db,
+          'courses',
+          courseId
+        ),
+        {
+          lessons:
+            updatedLessons.map(
+              serializeLesson
+            ),
+          updatedAt:
+            serverTimestamp(),
+        },
+        {
+          merge: true,
+        }
+      );
+
+      alert(
+        'Arquivo removido.'
+      );
+    } catch (error) {
+      console.error(
+        'Erro ao remover arquivo:',
+        error
+      );
+
+      alert(
+        'Não foi possível remover o arquivo.'
+      );
+    }
   }
 
-  // =========================================================
-  // ATUALIZA AULA
-  // =========================================================
-
-  function updateLesson(
-    lessonId: string,
-    changes: Partial<Lesson>
+  async function deleteLesson(
+    courseId: string,
+    lessonId: string
   ) {
-    if (!selectedCourse) {
-      return;
-    }
-
-    if (!approved) {
-      alert(
-        'A edição está bloqueada até a aprovação do administrador.'
+    const course =
+      courses.find(
+        (item) =>
+          item.id === courseId
       );
+
+    if (!course) {
       return;
     }
 
-    const lessons =
-      selectedCourse.lessons.map(
+    const confirmed =
+      window.confirm(
+        'Tem certeza que deseja excluir esta aula?'
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    const updatedLessons =
+      course.lessons.filter(
         (lesson) =>
-          lesson.id ===
+          lesson.id !==
           lessonId
-            ? {
-                ...lesson,
-                ...changes,
-              }
-            : lesson
       );
 
-    const updatedCourse = {
-      ...selectedCourse,
-      lessons,
-    };
-
-    setCourses(
-      (current) =>
-        current.map(
-          (course) =>
-            course.id ===
-            selectedCourse.id
-              ? updatedCourse
-              : course
-        )
+    setCourses((current) =>
+      current.map((item) =>
+        item.id === courseId
+          ? {
+              ...item,
+              lessons:
+                updatedLessons,
+            }
+          : item
+      )
     );
-  }
 
-  // =========================================================
-  // ADICIONAR AULA
-  // =========================================================
-
-  function addLesson() {
-    if (!selectedCourse) {
+    if (!db) {
       return;
     }
 
-    if (!approved) {
+    try {
+      await setDoc(
+        doc(
+          db,
+          'courses',
+          courseId
+        ),
+        {
+          lessons:
+            updatedLessons.map(
+              serializeLesson
+            ),
+          updatedAt:
+            serverTimestamp(),
+        },
+        {
+          merge: true,
+        }
+      );
+    } catch (error) {
+      console.error(
+        'Erro ao excluir aula:',
+        error
+      );
+
       alert(
-        'A edição está bloqueada até a aprovação do administrador.'
+        'Não foi possível excluir a aula.'
       );
+    }
+  }
+
+  async function deleteCourse(
+    courseId: string
+  ) {
+    if (!db) {
       return;
     }
 
-    const nextId =
-      String(
-        selectedCourse.lessons.length +
-          1
+    const confirmed =
+      window.confirm(
+        'Tem certeza que deseja excluir este curso? Essa ação não pode ser desfeita.'
       );
 
-    const newLesson: Lesson = {
-      id:
-        nextId,
+    if (!confirmed) {
+      return;
+    }
 
-      title:
-        `Página ${nextId}`,
+    setDeletingCourse(true);
 
-      description:
-        '',
+    try {
+      await deleteDoc(
+        doc(
+          db,
+          'courses',
+          courseId
+        )
+      );
 
-      type:
-        'pdf',
+      setCourses((current) =>
+        current.filter(
+          (course) =>
+            course.id !==
+            courseId
+        )
+      );
 
-      content:
-        '',
+      setSelectedCourseId(
+        null
+      );
 
-      duration:
-        0,
+      setActiveTab(
+        'courses'
+      );
+    } catch (error) {
+      console.error(
+        'Erro ao excluir curso:',
+        error
+      );
 
-      xpReward:
-        10,
-    };
-
-    updateCourse(
-      selectedCourse.id,
-      {
-        lessons: [
-          ...selectedCourse.lessons,
-          newLesson,
-        ],
-      }
-    );
+      alert(
+        'Não foi possível excluir o curso. Verifique as regras do Firestore.'
+      );
+    } finally {
+      setDeletingCourse(false);
+    }
   }
-
-  // =========================================================
-  // CARREGAMENTO
-  // =========================================================
 
   if (loadingApproval) {
     return (
-      <Page>
-        <div
-          style={{
-            textAlign:
-              'center',
-            padding:
-              '100px 20px',
-            color:
-              '#9CA3AF',
-          }}
-        >
-          🔄 Verificando aprovação...
+      <div style={styles.centerScreen}>
+        <div style={styles.loadingCard}>
+          <div style={styles.loadingIcon}>
+            ⏳
+          </div>
+
+          <h2 style={styles.loadingTitle}>
+            Verificando aprovação
+          </h2>
+
+          <p style={styles.mutedText}>
+            Aguarde enquanto verificamos
+            seu acesso de professor.
+          </p>
         </div>
-      </Page>
+      </div>
     );
   }
 
-  // =========================================================
-  // PROFESSOR AINDA NÃO APROVADO
-  // =========================================================
-
-  if (!approved) {
+  if (
+    teacherStatus ===
+    'pending'
+  ) {
     return (
-      <Page>
-        <div
-          style={{
-            maxWidth:
-              '700px',
-            margin:
-              '80px auto',
-            background:
-              '#0D1424',
-            border:
-              '1px solid #26344D',
-            borderRadius:
-              '18px',
-            padding:
-              '40px',
-            textAlign:
-              'center',
-          }}
-        >
-          <div
-            style={{
-              fontSize:
-                '60px',
-              marginBottom:
-                '15px',
-            }}
-          >
-            {teacherStatus ===
-            'rejected'
-              ? '❌'
-              : '⏳'}
+      <div style={styles.centerScreen}>
+        <div style={styles.statusCard}>
+          <div style={styles.statusIcon}>
+            🕐
           </div>
 
-          <h1>
-            {teacherStatus ===
-            'rejected'
-              ? 'Cadastro recusado'
-              : 'Aguardando aprovação'}
+          <h1 style={styles.statusTitle}>
+            Cadastro em análise
           </h1>
 
-          <p
-            style={{
-              color:
-                '#9CA3AF',
-              lineHeight:
-                1.7,
-            }}
-          >
-            {teacherStatus ===
-            'rejected'
-              ? 'O administrador recusou seu cadastro de professor. Entre em contato com a administração para saber o motivo.'
-              : 'Seu cadastro de professor foi recebido. O administrador precisa analisar seus dados antes de liberar a criação e publicação de cursos.'}
+          <p style={styles.statusText}>
+            Seu cadastro de professor
+            ainda está aguardando
+            aprovação do administrador.
           </p>
 
-          <div
-            style={{
-              display:
-                'inline-block',
-              marginTop:
-                '15px',
-              padding:
-                '8px 14px',
-              borderRadius:
-                '999px',
-              background:
-                teacherStatus ===
-                'rejected'
-                  ? '#FF555522'
-                  : '#F59E0B22',
-              color:
-                teacherStatus ===
-                'rejected'
-                  ? '#FF5555'
-                  : '#F59E0B',
-              fontWeight:
-                'bold',
-              fontSize:
-                '13px',
-            }}
+          <button
+            style={styles.secondaryButton}
+            onClick={() =>
+              window.location.reload()
+            }
           >
-            Status:{' '}
-            {teacherStatus ===
-            'rejected'
-              ? 'Recusado'
-              : 'Pendente'}
-          </div>
-
-          <p
-            style={{
-              color:
-                '#6B7280',
-              fontSize:
-                '12px',
-              marginTop:
-                '20px',
-            }}
-          >
-            Esta página verifica
-            automaticamente quando o
-            administrador alterar seu status.
-          </p>
+            Atualizar status
+          </button>
         </div>
-      </Page>
+      </div>
     );
   }
 
-  // =========================================================
-  // ÁREA LIBERADA
-  // =========================================================
+  if (
+    teacherStatus ===
+    'rejected'
+  ) {
+    return (
+      <div style={styles.centerScreen}>
+        <div style={styles.statusCard}>
+          <div style={styles.statusIcon}>
+            ❌
+          </div>
+
+          <h1 style={styles.statusTitle}>
+            Cadastro não aprovado
+          </h1>
+
+          <p style={styles.statusText}>
+            Seu cadastro de professor
+            foi recusado.
+          </p>
+
+          <button
+            style={styles.secondaryButton}
+            onClick={() =>
+              window.location.reload()
+            }
+          >
+            Verificar novamente
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <Page>
-      <header
-        style={{
-          display:
-            'flex',
-          justifyContent:
-            'space-between',
-          alignItems:
-            'center',
-          gap:
-            '20px',
-          marginBottom:
-            '30px',
-          flexWrap:
-            'wrap',
-        }}
-      >
+    <div style={styles.page}>
+      <header style={styles.header}>
         <div>
-          <div
-            style={{
-              color:
-                '#00D4FF',
-              fontSize:
-                '12px',
-              fontWeight:
-                'bold',
-              letterSpacing:
-                '3px',
-            }}
-          >
+          <div style={styles.brand}>
             CODEQUEST NEXUS
           </div>
 
-          <h1
-            style={{
-              fontSize:
-                '34px',
-              margin:
-                '8px 0',
-            }}
-          >
-            👨‍🏫 Central do Professor
+          <h1 style={styles.pageTitle}>
+            Painel do Professor
           </h1>
 
-          <p
-            style={{
-              color:
-                '#9CA3AF',
-              margin:
-                0,
-            }}
-          >
-            Seu cadastro foi aprovado.
-            Agora você pode criar e
-            editar seus cursos.
+          <p style={styles.pageSubtitle}>
+            Crie cursos, aulas e materiais
+            para seus alunos.
           </p>
         </div>
 
-        <div
-          style={{
-            background:
-              '#071F17',
-            border:
-              '1px solid #00FF88',
-            padding:
-              '12px 16px',
-            borderRadius:
-              '12px',
-            color:
-              '#00FF88',
-            fontWeight:
-              'bold',
-          }}
-        >
-          ✅ PROFESSOR APROVADO
-        </div>
-      </header>
-
-      <div
-        style={{
-          display:
-            'grid',
-          gridTemplateColumns:
-            'repeat(auto-fit, minmax(180px, 1fr))',
-          gap:
-            '15px',
-          marginBottom:
-            '30px',
-        }}
-      >
-        <Stat
-          icon="📚"
-          title="Cursos"
-          value={
-            courses.length
-          }
-        />
-
-        <Stat
-          icon="👁️"
-          title="Visitas"
-          value={
-            courses.reduce(
-              (
-                total,
-                course
-              ) =>
-                total +
-                course.views,
-              0
-            )
-          }
-        />
-
-        <Stat
-          icon="⭐"
-          title="Avaliação média"
-          value={
-            Number(
-              getAverageRating(
-                courses
-              ).toFixed(1)
-            )
-          }
-        />
-
-        <Stat
-          icon="📄"
-          title="Aulas"
-          value={
-            courses.reduce(
-              (
-                total,
-                course
-              ) =>
-                total +
-                course.lessons
-                  .length,
-              0
-            )
-          }
-        />
-      </div>
-
-      {loadingCourses && (
-        <div
-          style={{
-            marginBottom:
-              '20px',
-            color:
-              '#9CA3AF',
-            fontSize:
-              '13px',
-          }}
-        >
-          🔄 Carregando seus cursos...
-        </div>
-      )}
-
-      <div
-        style={{
-          display:
-            'grid',
-          gridTemplateColumns:
-            '230px minmax(0, 1fr)',
-          gap:
-            '20px',
-        }}
-      >
-        <aside
-          style={{
-            background:
-              '#0D1424',
-            border:
-              '1px solid #1F2937',
-            borderRadius:
-              '16px',
-            padding:
-              '15px',
-            height:
-              'fit-content',
-          }}
-        >
+        <div style={styles.headerActions}>
           <button
-            onClick={() =>
+            style={
+              activeTab ===
+              'courses'
+                ? styles.activeTabButton
+                : styles.tabButton
+            }
+            onClick={() => {
               setActiveTab(
                 'courses'
-              )
-            }
-            style={menuStyle(
-              activeTab ===
-                'courses'
-            )}
+              );
+              setSelectedCourseId(
+                null
+              );
+            }}
           >
             📚 Meus cursos
           </button>
 
           <button
-            onClick={() =>
+            style={
+              activeTab ===
+              'create'
+                ? styles.activeTabButton
+                : styles.tabButton
+            }
+            onClick={() => {
               setActiveTab(
                 'create'
-              )
-            }
-            style={menuStyle(
-              activeTab ===
-                'create'
-            )}
+              );
+              setSelectedCourseId(
+                null
+              );
+            }}
           >
             ➕ Criar curso
           </button>
+        </div>
+      </header>
 
-          <button
-            onClick={() =>
-              setActiveTab(
-                'score'
-              )
+      <main style={styles.main}>
+        {activeTab ===
+          'create' && (
+          <CreateCourse
+            title={
+              newCourseTitle
             }
-            style={menuStyle(
-              activeTab ===
-                'score'
-            )}
-          >
-            ⭐ Pontuação
-          </button>
-
-          <div
-            style={{
-              borderTop:
-                '1px solid #1F2937',
-              margin:
-                '15px 0',
-            }}
+            description={
+              newCourseDescription
+            }
+            onTitleChange={
+              setNewCourseTitle
+            }
+            onDescriptionChange={
+              setNewCourseDescription
+            }
+            onCreate={
+              createCourse
+            }
+            creating={
+              creating
+            }
           />
+        )}
 
-          {courses.length ===
-          0 ? (
-            <div
-              style={{
-                color:
-                  '#6B7280',
-                fontSize:
-                  '12px',
-                padding:
-                  '8px',
+        {activeTab ===
+          'courses' &&
+          !selectedCourse && (
+            <CourseList
+              courses={courses}
+              loading={
+                loadingCourses
+              }
+              onSelect={(courseId) => {
+                setSelectedCourseId(
+                  courseId
+                );
+                setActiveTab(
+                  'courses'
+                );
               }}
-            >
-              Nenhum curso criado.
-            </div>
-          ) : (
-            courses.map(
-              (course) => (
-                <button
-                  key={
-                    course.id
-                  }
-                  onClick={() => {
-                    setSelectedCourseId(
-                      course.id
-                    );
-                    setActiveTab(
-                      'courses'
-                    );
-                  }}
-                  style={{
-                    width:
-                      '100%',
-                    textAlign:
-                      'left',
-                    border:
-                      'none',
-                    borderRadius:
-                      '8px',
-                    padding:
-                      '10px',
-                    marginBottom:
-                      '5px',
-                    cursor:
-                      'pointer',
-                    background:
-                      selectedCourseId ===
-                      course.id
-                        ? '#17233A'
-                        : 'transparent',
-                    color:
-                      selectedCourseId ===
-                      course.id
-                        ? '#00D4FF'
-                        : '#9CA3AF',
-                  }}
-                >
-                  📘{' '}
-                  {
-                    course.name
-                  }
-                </button>
-              )
-            )
-          )}
-        </aside>
-
-        <main
-          style={{
-            background:
-              '#0D1424',
-            border:
-              '1px solid #1F2937',
-            borderRadius:
-              '16px',
-            padding:
-              '25px',
-            minWidth:
-              0,
-          }}
-        >
-          {activeTab ===
-            'create' && (
-            <CreateCourse
-              title={
-                newCourseTitle
-              }
-              description={
-                newCourseDescription
-              }
-              setTitle={
-                setNewCourseTitle
-              }
-              setDescription={
-                setNewCourseDescription
-              }
-              onCreate={
-                createCourse
-              }
-              creating={
-                creating
-              }
+              onCreate={() => {
+                setActiveTab(
+                  'create'
+                );
+              }}
             />
           )}
 
-          {activeTab ===
-            'score' && (
-            <ScoreEditor
+        {activeTab ===
+          'courses' &&
+          selectedCourse && (
+            <CourseEditor
               course={
                 selectedCourse
               }
-              onUpdate={
+              deletingCourse={
+                deletingCourse
+              }
+              onBack={() => {
+                setSelectedCourseId(
+                  null
+                );
+              }}
+              onUpdateCourse={
                 updateCourse
               }
-              onSave={
+              onUpdateLesson={
+                updateLesson
+              }
+              onAddLesson={
+                addLesson
+              }
+              onSaveLesson={
+                saveLessonChanges
+              }
+              onUploadFile={
+                uploadLessonFile
+              }
+              onRemoveFile={
+                removeLessonFile
+              }
+              onDeleteLesson={
+                deleteLesson
+              }
+              onSaveCourse={
                 saveCourse
+              }
+              onDeleteCourse={
+                deleteCourse
               }
             />
           )}
-
-          {activeTab ===
-            'courses' &&
-            selectedCourse && (
-              <CourseEditor
-                course={
-                  selectedCourse
-                }
-                onUpdate={
-                  updateCourse
-                }
-                onUpdateLesson={
-                  updateLesson
-                }
-                onAddLesson={
-                  addLesson
-                }
-                onSave={
-                  saveCourse
-                }
-              />
-            )}
-
-          {activeTab ===
-            'courses' &&
-            !selectedCourse && (
-            <div
-              style={{
-                textAlign:
-                  'center',
-                padding:
-                  '80px 20px',
-                color:
-                  '#9CA3AF',
-              }}
-            >
-              <div
-                style={{
-                  fontSize:
-                    '50px',
-                }}
-              >
-                📚
-              </div>
-
-              <h2>
-                Crie seu primeiro
-                curso
-              </h2>
-
-              <button
-                onClick={() =>
-                  setActiveTab(
-                    'create'
-                  )
-                }
-                style={
-                  primaryButton
-                }
-              >
-                Criar curso
-              </button>
-            </div>
-          )}
-        </main>
-      </div>
-    </Page>
-  );
-}
-
-function Page({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      style={{
-        minHeight:
-          '100vh',
-        background:
-          'radial-gradient(circle at top right, #182447 0%, #080D19 45%, #050811 100%)',
-        color:
-          'white',
-        padding:
-          '30px',
-        fontFamily:
-          'sans-serif',
-      }}
-    >
-      <div
-        style={{
-          maxWidth:
-            '1400px',
-          margin:
-            '0 auto',
-        }}
-      >
-        {children}
-      </div>
+      </main>
     </div>
   );
 }
 
-function Stat({
-  icon,
-  title,
-  value,
-}: {
-  icon: string;
+interface CreateCourseProps {
   title: string;
-  value: number;
-}) {
-  return (
-    <div
-      style={{
-        background:
-          '#0D1424',
-        border:
-          '1px solid #1F2937',
-        borderRadius:
-          '14px',
-        padding:
-          '20px',
-      }}
-    >
-      <div
-        style={{
-          fontSize:
-            '25px',
-        }}
-      >
-        {icon}
-      </div>
-
-      <div
-        style={{
-          color:
-            '#9CA3AF',
-          fontSize:
-            '12px',
-          marginTop:
-            '10px',
-        }}
-      >
-        {title}
-      </div>
-
-      <div
-        style={{
-          fontSize:
-            '25px',
-          fontWeight:
-            'bold',
-          marginTop:
-            '4px',
-        }}
-      >
-        {value.toLocaleString(
-          'pt-BR'
-        )}
-      </div>
-    </div>
-  );
+  description: string;
+  onTitleChange: (
+    value: string
+  ) => void;
+  onDescriptionChange: (
+    value: string
+  ) => void;
+  onCreate: () => void;
+  creating: boolean;
 }
 
 function CreateCourse({
   title,
   description,
-  setTitle,
-  setDescription,
+  onTitleChange,
+  onDescriptionChange,
   onCreate,
   creating,
-}: {
-  title: string;
-  description: string;
-  setTitle: (
-    value: string
-  ) => void;
-  setDescription: (
-    value: string
-  ) => void;
-  onCreate: () => Promise<void>;
-  creating: boolean;
-}) {
+}: CreateCourseProps) {
   return (
-    <section>
-      <h2>
-        ➕ Criar novo curso
-      </h2>
+    <section style={styles.panel}>
+      <div style={styles.panelHeader}>
+        <div>
+          <span style={styles.eyebrow}>
+            NOVO CURSO
+          </span>
 
-      <p
-        style={{
-          color:
-            '#9CA3AF',
-        }}
-      >
-        O curso será criado como
-        não publicado até que esteja
-        pronto.
-      </p>
+          <h2 style={styles.sectionTitle}>
+            Criar um novo curso
+          </h2>
 
-      <div
-        style={{
-          display:
-            'grid',
-          gap:
-            '20px',
-          maxWidth:
-            '700px',
-          marginTop:
-            '25px',
-        }}
-      >
-        <label
-          style={
-            labelStyle
-          }
-        >
-          Nome do curso
-
-          <input
-            value={
-              title
-            }
-            onChange={(
-              event
-            ) =>
-              setTitle(
-                event.target.value
-              )
-            }
-            placeholder="Ex.: Python do Zero"
-            style={
-              inputStyle
-            }
-          />
-        </label>
-
-        <label
-          style={
-            labelStyle
-          }
-        >
-          Descrição
-
-          <textarea
-            value={
-              description
-            }
-            onChange={(
-              event
-            ) =>
-              setDescription(
-                event.target.value
-              )
-            }
-            placeholder="Explique o que o aluno aprenderá..."
-            style={{
-              ...inputStyle,
-              minHeight:
-                '120px',
-              resize:
-                'vertical',
-            }}
-          />
-        </label>
+          <p style={styles.mutedText}>
+            Monte uma nova experiência
+            de aprendizagem.
+          </p>
+        </div>
       </div>
 
-      <button
-        onClick={() =>
-          void onCreate()
-        }
-        disabled={
-          creating
-        }
-        style={
-          primaryButton
-        }
-      >
-        {creating
-          ? 'Criando...'
-          : '🚀 Criar curso'}
-      </button>
+      <div style={styles.form}>
+        <label style={styles.label}>
+          Nome do curso
+        </label>
+
+        <input
+          style={styles.input}
+          value={title}
+          onChange={(event) =>
+            onTitleChange(
+              event.target.value
+            )
+          }
+          placeholder="Ex.: JavaScript do zero"
+        />
+
+        <label style={styles.label}>
+          Descrição
+        </label>
+
+        <textarea
+          style={styles.textarea}
+          value={description}
+          onChange={(event) =>
+            onDescriptionChange(
+              event.target.value
+            )
+          }
+          placeholder="Explique o que os alunos irão aprender..."
+          rows={6}
+        />
+
+        <button
+          style={styles.primaryButton}
+          onClick={onCreate}
+          disabled={
+            creating ||
+            !title.trim()
+          }
+        >
+          {creating
+            ? 'Criando...'
+            : '🚀 Criar curso'}
+        </button>
+      </div>
     </section>
   );
 }
 
-function ScoreEditor({
-  course,
-  onUpdate,
-  onSave,
-}: {
-  course: Course | null;
-  onUpdate: (
-    id: string,
-    changes: Partial<Course>
+interface CourseListProps {
+  courses: Course[];
+  loading: boolean;
+  onSelect: (
+    courseId: string
   ) => void;
-  onSave: (
-    course: Course
-  ) => Promise<void>;
-}) {
-  if (!course) {
-    return (
-      <div>
-        <h2>
-          ⭐ Pontuação
-        </h2>
+  onCreate: () => void;
+}
 
-        <p
-          style={{
-            color:
-              '#9CA3AF',
-          }}
-        >
-          Selecione um curso
-          primeiro.
+function CourseList({
+  courses,
+  loading,
+  onSelect,
+  onCreate,
+}: CourseListProps) {
+  if (loading) {
+    return (
+      <section style={styles.panel}>
+        <p style={styles.mutedText}>
+          Carregando cursos...
         </p>
-      </div>
+      </section>
     );
   }
 
   return (
     <section>
-      <h2>
-        ⭐ Configuração do curso
-      </h2>
+      <div style={styles.listHeader}>
+        <div>
+          <span style={styles.eyebrow}>
+            PROFESSOR
+          </span>
 
-      <div
-        style={{
-          background:
-            '#111827',
-          borderRadius:
-            '12px',
-          padding:
-            '20px',
-          marginTop:
-            '20px',
-        }}
-      >
-        <strong>
-          {course.name}
-        </strong>
+          <h2 style={styles.sectionTitle}>
+            Meus cursos
+          </h2>
 
-        <p
-          style={{
-            color:
-              '#9CA3AF',
-          }}
-        >
-          Avaliação atual:{' '}
-          {course.averageRating.toFixed(
+          <p style={styles.mutedText}>
+            {courses.length}{' '}
+            {courses.length ===
             1
-          )}{' '}
-          / 5
-        </p>
-
-        <label
-          style={
-            labelStyle
-          }
-        >
-          Publicação
-
-          <select
-            value={
-              course.published
-                ? 'published'
-                : 'draft'
-            }
-            onChange={(
-              event
-            ) =>
-              onUpdate(
-                course.id,
-                {
-                  published:
-                    event.target.value ===
-                    'published',
-                }
-              )
-            }
-            style={{
-              ...inputStyle,
-              marginTop:
-                '8px',
-            }}
-          >
-            <option value="draft">
-              Rascunho
-            </option>
-
-            <option value="published">
-              Publicado
-            </option>
-          </select>
-        </label>
+              ? 'curso criado'
+              : 'cursos criados'}
+          </p>
+        </div>
 
         <button
-          onClick={() =>
-            void onSave(
-              course
-            )
-          }
+          style={styles.primaryButton}
+          onClick={onCreate}
+        >
+          ➕ Novo curso
+        </button>
+      </div>
+
+      {courses.length ===
+        0 && (
+        <div
           style={
-            primaryButton
+            styles.emptyState
           }
         >
-          💾 Salvar curso
-        </button>
+          <div
+            style={
+              styles.emptyIcon
+            }
+          >
+            📚
+          </div>
+
+          <h3
+            style={
+              styles.emptyTitle
+            }
+          >
+            Você ainda não criou
+            nenhum curso
+          </h3>
+
+          <p
+            style={
+              styles.mutedText
+            }
+          >
+            Crie seu primeiro curso
+            para começar.
+          </p>
+
+          <button
+            style={
+              styles.primaryButton
+            }
+            onClick={onCreate}
+          >
+            Criar primeiro curso
+          </button>
+        </div>
+      )}
+
+      <div style={styles.courseGrid}>
+        {courses.map(
+          (course) => (
+            <button
+              key={course.id}
+              style={
+                styles.courseCard
+              }
+              onClick={() =>
+                onSelect(
+                  course.id
+                )
+              }
+            >
+              <div
+                style={{
+                  ...styles.courseIcon,
+                  background:
+                    course.color,
+                }}
+              >
+                {course.icon}
+              </div>
+
+              <div
+                style={
+                  styles.courseCardContent
+                }
+              >
+                <div
+                  style={
+                    styles.courseStatus
+                  }
+                >
+                  {course.published
+                    ? '🟢 Publicado'
+                    : '🟡 Rascunho'}
+                </div>
+
+                <h3
+                  style={
+                    styles.courseTitle
+                  }
+                >
+                  {course.name}
+                </h3>
+
+                <p
+                  style={
+                    styles.courseDescription
+                  }
+                >
+                  {course.description ||
+                    'Sem descrição.'}
+                </p>
+
+                <div
+                  style={
+                    styles.courseMeta
+                  }
+                >
+                  <span>
+                    📖{' '}
+                    {
+                      course
+                        .lessons
+                        .length
+                    }{' '}
+                    aulas
+                  </span>
+
+                  <span>
+                    ⭐{' '}
+                    {getAverageRating(
+                      course
+                    )}
+                  </span>
+
+                  <span>
+                    👁️{' '}
+                    {course.views}
+                  </span>
+                </div>
+              </div>
+            </button>
+          )
+        )}
       </div>
     </section>
   );
 }
 
-function CourseEditor({
-  course,
-  onUpdate,
-  onUpdateLesson,
-  onAddLesson,
-  onSave,
-}: {
+interface CourseEditorProps {
   course: Course;
-  onUpdate: (
-    id: string,
+  deletingCourse: boolean;
+  onBack: () => void;
+  onUpdateCourse: (
+    courseId: string,
     changes: Partial<Course>
   ) => void;
   onUpdateLesson: (
-    id: string,
+    courseId: string,
+    lessonId: string,
     changes: Partial<Lesson>
   ) => void;
-  onAddLesson: () => void;
-  onSave: (
+  onAddLesson: (
+    courseId: string
+  ) => void;
+  onSaveLesson: (
+    courseId: string,
+    lesson: Lesson
+  ) => Promise<void>;
+  onUploadFile: (
+    courseId: string,
+    lesson: Lesson,
+    file: File
+  ) => Promise<void>;
+  onRemoveFile: (
+    courseId: string,
+    lessonId: string
+  ) => Promise<void>;
+  onDeleteLesson: (
+    courseId: string,
+    lessonId: string
+  ) => Promise<void>;
+  onSaveCourse: (
     course: Course
   ) => Promise<void>;
-}) {
+  onDeleteCourse: (
+    courseId: string
+  ) => Promise<void>;
+}
+
+function CourseEditor({
+  course,
+  deletingCourse,
+  onBack,
+  onUpdateCourse,
+  onUpdateLesson,
+  onAddLesson,
+  onSaveLesson,
+  onUploadFile,
+  onRemoveFile,
+  onDeleteLesson,
+  onSaveCourse,
+  onDeleteCourse,
+}: CourseEditorProps) {
+  const [
+    savingCourse,
+    setSavingCourse,
+  ] = useState(false);
+
+  async function handleSave() {
+    setSavingCourse(true);
+
+    try {
+      await onSaveCourse(
+        course
+      );
+
+      alert(
+        'Curso salvo com sucesso!'
+      );
+    } catch (error) {
+      console.error(error);
+
+      alert(
+        'Não foi possível salvar o curso.'
+      );
+    } finally {
+      setSavingCourse(false);
+    }
+  }
+
   return (
     <section>
-      <div
-        style={{
-          display:
-            'flex',
-          justifyContent:
-            'space-between',
-          alignItems:
-            'flex-start',
-          gap:
-            '20px',
-          flexWrap:
-            'wrap',
-        }}
-      >
-        <div
-          style={{
-            flex:
-              1,
-          }}
+      <div style={styles.editorTop}>
+        <button
+          style={styles.backButton}
+          onClick={onBack}
         >
+          ← Voltar
+        </button>
+
+        <div>
+          <span style={styles.eyebrow}>
+            EDITANDO CURSO
+          </span>
+
+          <h2 style={styles.sectionTitle}>
+            {course.name}
+          </h2>
+        </div>
+      </div>
+
+      <div style={styles.panel}>
+        <div
+          style={
+            styles.panelHeader
+          }
+        >
+          <div>
+            <h3
+              style={
+                styles.subsectionTitle
+              }
+            >
+              Informações do curso
+            </h3>
+
+            <p
+              style={
+                styles.mutedText
+              }
+            >
+              Edite o título e a
+              descrição.
+            </p>
+          </div>
+        </div>
+
+        <div style={styles.form}>
+          <label
+            style={styles.label}
+          >
+            Nome
+          </label>
+
           <input
-            value={
-              course.name
-            }
-            onChange={(
-              event
-            ) =>
-              onUpdate(
+            style={styles.input}
+            value={course.name}
+            onChange={(event) =>
+              onUpdateCourse(
                 course.id,
                 {
                   name:
-                    event.target.value,
+                    event.target
+                      .value,
+                  slug: createSlug(
+                    event.target
+                      .value
+                  ),
                 }
               )
             }
-            style={{
-              ...inputStyle,
-              fontSize:
-                '25px',
-              fontWeight:
-                'bold',
-            }}
           />
 
+          <label
+            style={styles.label}
+          >
+            Descrição
+          </label>
+
           <textarea
+            style={styles.textarea}
             value={
               course.description
             }
-            onChange={(
-              event
-            ) =>
-              onUpdate(
+            onChange={(event) =>
+              onUpdateCourse(
                 course.id,
                 {
                   description:
-                    event.target.value,
+                    event.target
+                      .value,
                 }
               )
             }
-            style={{
-              ...inputStyle,
-              marginTop:
-                '10px',
-              minHeight:
-                '80px',
-            }}
+            rows={5}
           />
-        </div>
 
-        <button
-          onClick={
-            onAddLesson
-          }
-          style={
-            primaryButton
-          }
-        >
-          ➕ Nova página
-        </button>
+          <div
+            style={
+              styles.statsGrid
+            }
+          >
+            <div
+              style={
+                styles.statCard
+              }
+            >
+              <strong
+                style={
+                  styles.statNumber
+                }
+              >
+                {
+                  course.lessons
+                    .length
+                }
+              </strong>
+
+              <span
+                style={
+                  styles.statLabel
+                }
+              >
+                Aulas
+              </span>
+            </div>
+
+            <div
+              style={
+                styles.statCard
+              }
+            >
+              <strong
+                style={
+                  styles.statNumber
+                }
+              >
+                {
+                  course.views
+                }
+              </strong>
+
+              <span
+                style={
+                  styles.statLabel
+                }
+              >
+                Visualizações
+              </span>
+            </div>
+
+            <div
+              style={
+                styles.statCard
+              }
+            >
+              <strong
+                style={
+                  styles.statNumber
+                }
+              >
+                ⭐{' '}
+                {getAverageRating(
+                  course
+                )}
+              </strong>
+
+              <span
+                style={
+                  styles.statLabel
+                }
+              >
+                Avaliação
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div
         style={{
-          display:
-            'grid',
-          gridTemplateColumns:
-            '220px minmax(0, 1fr)',
-          gap:
-            '20px',
-          marginTop:
-            '30px',
+          ...styles.panel,
+          marginTop: 20,
         }}
       >
         <div
-          style={{
-            background:
-              '#080D19',
-            borderRadius:
-              '12px',
-            padding:
-              '12px',
-          }}
+          style={
+            styles.panelHeader
+          }
         >
-          <strong
-            style={{
-              fontSize:
-                '13px',
-            }}
-          >
-            NAVEGAÇÃO
-          </strong>
+          <div>
+            <h3
+              style={
+                styles.subsectionTitle
+              }
+            >
+              Aulas
+            </h3>
 
-          {course.lessons.map(
-            (
-              lesson,
-              index
-            ) => (
-              <div
-                key={
-                  lesson.id
-                }
-                style={{
-                  padding:
-                    '12px 8px',
-                  borderBottom:
-                    '1px solid #1F2937',
-                  fontSize:
-                    '13px',
-                }}
-              >
-                {index +
-                  1}
-                .{' '}
-                {lessonIcon(
-                  lesson.type
-                )}{' '}
-                {
-                  lesson.title
-                }
-              </div>
-            )
-          )}
+            <p
+              style={
+                styles.mutedText
+              }
+            >
+              Adicione conteúdo,
+              PDFs e links de vídeos.
+            </p>
+          </div>
+
+          <button
+            style={
+              styles.primaryButton
+            }
+            onClick={() =>
+              onAddLesson(
+                course.id
+              )
+            }
+          >
+            ➕ Nova aula
+          </button>
         </div>
 
         <div>
           {course.lessons.map(
             (
-              lesson
+              lesson,
+              index
             ) => (
               <LessonEditor
                 key={
@@ -1868,8 +2200,48 @@ function CourseEditor({
                 lesson={
                   lesson
                 }
+                index={
+                  index
+                }
+                courseId={
+                  course.id
+                }
                 onUpdate={
-                  onUpdateLesson
+                  (
+                    changes
+                  ) =>
+                    onUpdateLesson(
+                      course.id,
+                      lesson.id,
+                      changes
+                    )
+                }
+                onSave={() =>
+                  onSaveLesson(
+                    course.id,
+                    lesson
+                  )
+                }
+                onUploadFile={(
+                  file
+                ) =>
+                  onUploadFile(
+                    course.id,
+                    lesson,
+                    file
+                  )
+                }
+                onRemoveFile={() =>
+                  onRemoveFile(
+                    course.id,
+                    lesson.id
+                  )
+                }
+                onDelete={() =>
+                  onDeleteLesson(
+                    course.id,
+                    lesson.id
+                  )
                 }
               />
             )
@@ -1879,428 +2251,1395 @@ function CourseEditor({
 
       <div
         style={{
-          display:
-            'flex',
-          gap:
-            '15px',
-          marginTop:
-            '25px',
-          flexWrap:
-            'wrap',
+          ...styles.panel,
+          marginTop: 20,
         }}
       >
-        <InfoBox
-          title="👁️ Visitas"
-          value={
-            course.views
+        <div
+          style={
+            styles.panelHeader
           }
-        />
+        >
+          <div>
+            <h3
+              style={
+                styles.subsectionTitle
+              }
+            >
+              Publicação
+            </h3>
 
-        <InfoBox
-          title="⭐ Avaliação"
-          value={
-            Number(
-              course.averageRating.toFixed(
-                1
+            <p
+              style={
+                styles.mutedText
+              }
+            >
+              Controle se os alunos
+              conseguem acessar este
+              curso.
+            </p>
+          </div>
+
+          <label
+            style={
+              styles.switchLabel
+            }
+          >
+            <input
+              type="checkbox"
+              checked={
+                course.published
+              }
+              onChange={(event) =>
+                onUpdateCourse(
+                  course.id,
+                  {
+                    published:
+                      event.target
+                        .checked,
+                  }
+                )
+              }
+            />
+
+            <span>
+              {course.published
+                ? 'Publicado'
+                : 'Rascunho'}
+            </span>
+          </label>
+        </div>
+
+        <div
+          style={
+            styles.actionRow
+          }
+        >
+          <button
+            style={
+              styles.primaryButton
+            }
+            onClick={
+              handleSave
+            }
+            disabled={
+              savingCourse
+            }
+          >
+            {savingCourse
+              ? 'Salvando...'
+              : '💾 Salvar curso'}
+          </button>
+
+          <button
+            style={
+              styles.dangerButton
+            }
+            onClick={() =>
+              onDeleteCourse(
+                course.id
               )
-            )
-          }
-        />
-
-        <InfoBox
-          title="📝 Avaliações"
-          value={
-            course.ratingsCount
-          }
-        />
+            }
+            disabled={
+              deletingCourse
+            }
+          >
+            {deletingCourse
+              ? 'Excluindo...'
+              : '🗑️ Excluir curso'}
+          </button>
+        </div>
       </div>
-
-      <button
-        onClick={() =>
-          void onSave(
-            course
-          )
-        }
-        style={{
-          ...primaryButton,
-          marginTop:
-            '25px',
-        }}
-      >
-        💾 Salvar alterações
-      </button>
     </section>
   );
 }
 
-function LessonEditor({
-  lesson,
-  onUpdate,
-}: {
+interface LessonEditorProps {
   lesson: Lesson;
+  index: number;
+  courseId: string;
   onUpdate: (
-    id: string,
     changes: Partial<Lesson>
   ) => void;
-}) {
+  onSave: () => Promise<void>;
+  onUploadFile: (
+    file: File
+  ) => Promise<void>;
+  onRemoveFile: () => Promise<void>;
+  onDelete: () => Promise<void>;
+}
+
+function LessonEditor({
+  lesson,
+  index,
+  onUpdate,
+  onSave,
+  onUploadFile,
+  onRemoveFile,
+  onDelete,
+}: LessonEditorProps) {
+  const [
+    saving,
+    setSaving,
+  ] = useState(false);
+
+  const [
+    uploading,
+    setUploading,
+  ] = useState(false);
+
+  const [
+    removing,
+    setRemoving,
+  ] = useState(false);
+
+  const [
+    deleting,
+    setDeleting,
+  ] = useState(false);
+
+  async function handleSave() {
+    setSaving(true);
+
+    try {
+      await onSave();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleFileChange(
+    event: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const file =
+      event.target.files?.[0];
+
+    event.target.value = '';
+
+    if (!file) {
+      return;
+    }
+
+    setUploading(true);
+
+    try {
+      await onUploadFile(
+        file
+      );
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleRemoveFile() {
+    const confirmed =
+      window.confirm(
+        'Remover o material desta aula?'
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setRemoving(true);
+
+    try {
+      await onRemoveFile();
+    } finally {
+      setRemoving(false);
+    }
+  }
+
+  async function handleDelete() {
+    setDeleting(true);
+
+    try {
+      await onDelete();
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
     <div
-      style={{
-        background:
-          '#111827',
-        border:
-          '1px solid #1F2937',
-        borderRadius:
-          '12px',
-        padding:
-          '18px',
-        marginBottom:
-          '15px',
-      }}
+      style={
+        styles.lessonCard
+      }
     >
       <div
-        style={{
-          display:
-            'flex',
-          gap:
-            '10px',
-          alignItems:
-            'center',
-          marginBottom:
-            '12px',
-          flexWrap:
-            'wrap',
-        }}
+        style={
+          styles.lessonHeader
+        }
       >
-        <span
-          style={{
-            fontSize:
-              '22px',
-          }}
+        <div
+          style={
+            styles.lessonNumber
+          }
         >
-          {lessonIcon(
-            lesson.type
-          )}
-        </span>
+          {index + 1}
+        </div>
+
+        <div
+          style={
+            styles.lessonHeaderInfo
+          }
+        >
+          <span
+            style={
+              styles.lessonBadge
+            }
+          >
+            {lesson.type ===
+            'pdf'
+              ? '📄 PDF'
+              : lesson.type ===
+                'video'
+              ? '🎥 VÍDEO'
+              : '🧠 QUIZ'}
+          </span>
+
+          <h4
+            style={
+              styles.lessonTitle
+            }
+          >
+            {lesson.title ||
+              `Aula ${
+                index + 1
+              }`}
+          </h4>
+        </div>
+      </div>
+
+      <div
+        style={
+          styles.lessonForm
+        }
+      >
+        <label
+          style={styles.label}
+        >
+          Título da aula
+        </label>
 
         <input
+          style={styles.input}
           value={
             lesson.title
           }
-          onChange={(
-            event
-          ) =>
-            onUpdate(
-              lesson.id,
-              {
-                title:
-                  event.target.value,
-              }
-            )
+          onChange={(event) =>
+            onUpdate({
+              title:
+                event.target
+                  .value,
+            })
           }
-          style={{
-            ...inputStyle,
-            flex:
-              1,
-            minWidth:
-              '200px',
-          }}
+          placeholder="Ex.: Introdução ao JavaScript"
         />
 
-        <select
+        <label
+          style={styles.label}
+        >
+          Descrição
+        </label>
+
+        <textarea
+          style={styles.textarea}
           value={
-            lesson.type
+            lesson.description
           }
-          onChange={(
-            event
-          ) =>
-            onUpdate(
-              lesson.id,
-              {
-                type:
-                  event.target.value as LessonType,
-              }
-            )
+          onChange={(event) =>
+            onUpdate({
+              description:
+                event.target
+                  .value,
+            })
           }
+          rows={3}
+          placeholder="Descrição curta da aula..."
+        />
+
+        <div
           style={
-            inputStyle
+            styles.twoColumns
           }
         >
-          <option value="pdf">
-            PDF
-          </option>
+          <div>
+            <label
+              style={
+                styles.label
+              }
+            >
+              Tipo
+            </label>
 
-          <option value="video">
-            Vídeo
-          </option>
+            <select
+              style={
+                styles.input
+              }
+              value={
+                lesson.type
+              }
+              onChange={(
+                event
+              ) =>
+                onUpdate({
+                  type:
+                    event.target
+                      .value as LessonType,
+                })
+              }
+            >
+              <option value="pdf">
+                PDF / Material
+              </option>
 
-          <option value="quiz">
-            Questionário
-          </option>
-        </select>
-      </div>
+              <option value="video">
+                Vídeo
+              </option>
 
-      <textarea
-        value={
-          lesson.content
-        }
-        onChange={(
-          event
-        ) =>
-          onUpdate(
-            lesson.id,
-            {
+              <option value="quiz">
+                Quiz
+              </option>
+            </select>
+          </div>
+
+          <div>
+            <label
+              style={
+                styles.label
+              }
+            >
+              Duração (minutos)
+            </label>
+
+            <input
+              style={
+                styles.input
+              }
+              type="number"
+              min="0"
+              value={
+                lesson.duration
+              }
+              onChange={(event) =>
+                onUpdate({
+                  duration:
+                    Number(
+                      event.target
+                        .value
+                    ) || 0,
+                })
+              }
+            />
+          </div>
+        </div>
+
+        <div
+          style={
+            styles.twoColumns
+          }
+        >
+          <div>
+            <label
+              style={
+                styles.label
+              }
+            >
+              Recompensa XP
+            </label>
+
+            <input
+              style={
+                styles.input
+              }
+              type="number"
+              min="0"
+              value={
+                lesson.xpReward
+              }
+              onChange={(event) =>
+                onUpdate({
+                  xpReward:
+                    Number(
+                      event.target
+                        .value
+                    ) || 0,
+                })
+              }
+            />
+          </div>
+
+          <div />
+        </div>
+
+        <label
+          style={styles.label}
+        >
+          Conteúdo da aula
+        </label>
+
+        <textarea
+          style={{
+            ...styles.textarea,
+            minHeight: 180,
+          }}
+          value={
+            lesson.content
+          }
+          onChange={(event) =>
+            onUpdate({
               content:
-                event.target.value,
+                event.target
+                  .value,
+            })
+          }
+          placeholder={
+            lesson.type ===
+            'video'
+              ? 'Cole aqui informações ou instruções sobre o vídeo...'
+              : 'Digite o conteúdo da aula...'
+          }
+        />
+
+        {lesson.type ===
+          'pdf' && (
+          <div
+            style={
+              styles.materialBox
             }
-          )
-        }
-        placeholder="Conteúdo da aula..."
-        style={{
-          ...inputStyle,
-          minHeight:
-            '150px',
-          resize:
-            'vertical',
-        }}
-      />
-    </div>
-  );
-}
+          >
+            <div>
+              <strong
+                style={
+                  styles.materialTitle
+                }
+              >
+                📄 Material PDF
+              </strong>
 
-function InfoBox({
-  title,
-  value,
-}: {
-  title: string;
-  value: number;
-}) {
-  return (
-    <div
-      style={{
-        flex:
-          1,
-        minWidth:
-          '140px',
-        background:
-          '#111827',
-        borderRadius:
-          '10px',
-        padding:
-          '15px',
-      }}
-    >
-      <div
-        style={{
-          color:
-            '#9CA3AF',
-          fontSize:
-            '12px',
-        }}
-      >
-        {title}
-      </div>
+              <p
+                style={
+                  styles.mutedText
+                }
+              >
+                Neste modo sem
+                Firebase Storage,
+                PDFs pequenos ficam
+                armazenados
+                diretamente no
+                Firestore.
+              </p>
 
-      <strong
-        style={{
-          display:
-            'block',
-          marginTop:
-            '5px',
-          fontSize:
-            '20px',
-        }}
-      >
-        {value.toLocaleString(
-          'pt-BR'
+              <p
+                style={
+                  styles.warningText
+                }
+              >
+                Limite por PDF:{' '}
+                {formatFileSize(
+                  MAX_PDF_SIZE
+                )}
+                .
+              </p>
+            </div>
+
+            {lesson.fileUrl ? (
+              <div
+                style={
+                  styles.fileInfo
+                }
+              >
+                <div>
+                  <strong>
+                    📎{' '}
+                    {lesson.fileName ||
+                      'PDF anexado'}
+                  </strong>
+
+                  {lesson.fileSize && (
+                    <span
+                      style={
+                        styles.fileSize
+                      }
+                    >
+                      {' '}
+                      (
+                      {formatFileSize(
+                        lesson.fileSize
+                      )}
+                      )
+                    </span>
+                  )}
+                </div>
+
+                <div
+                  style={
+                    styles.actionRow
+                  }
+                >
+                  <a
+                    href={
+                      lesson.fileUrl
+                    }
+                    target="_blank"
+                    rel="noreferrer"
+                    style={
+                      styles.linkButton
+                    }
+                  >
+                    👁️ Abrir PDF
+                  </a>
+
+                  <button
+                    style={
+                      styles.dangerOutlineButton
+                    }
+                    onClick={
+                      handleRemoveFile
+                    }
+                    disabled={
+                      removing
+                    }
+                  >
+                    {removing
+                      ? 'Removendo...'
+                      : 'Remover'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <label
+                style={
+                  styles.uploadButton
+                }
+              >
+                {uploading
+                  ? '⏳ Enviando...'
+                  : '📎 Anexar PDF'}
+
+                <input
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  onChange={
+                    handleFileChange
+                  }
+                  disabled={
+                    uploading
+                  }
+                  style={
+                    styles.hiddenInput
+                  }
+                />
+              </label>
+            )}
+
+            {lesson.fileUrl &&
+              !isDataUrl(
+                lesson.fileUrl
+              ) && (
+                <p
+                  style={
+                    styles.warningText
+                  }
+                >
+                  Este material
+                  parece ser um link
+                  externo.
+                </p>
+              )}
+          </div>
         )}
-      </strong>
+
+        {lesson.type ===
+          'video' && (
+          <div
+            style={
+              styles.materialBox
+            }
+          >
+            <strong
+              style={
+                styles.materialTitle
+              }
+            >
+              🎥 Link do vídeo
+            </strong>
+
+            <p
+              style={
+                styles.mutedText
+              }
+            >
+              Para não usar
+              armazenamento pago,
+              coloque o vídeo no
+              YouTube, Vimeo ou
+              outra plataforma e
+              cole o link abaixo.
+            </p>
+
+            <input
+              style={styles.input}
+              type="url"
+              value={
+                lesson.fileUrl ??
+                ''
+              }
+              onChange={(event) =>
+                onUpdate({
+                  fileUrl:
+                    event.target
+                      .value,
+                  fileName:
+                    event.target
+                      .value
+                      ? 'Vídeo externo'
+                      : undefined,
+                  fileType:
+                    event.target
+                      .value
+                      ? 'text/url'
+                      : undefined,
+                  fileSize:
+                    undefined,
+                  uploadedAt:
+                    event.target
+                      .value
+                      ? new Date().toISOString()
+                      : undefined,
+                })
+              }
+              placeholder="https://www.youtube.com/watch?v=..."
+            />
+
+            {lesson.fileUrl && (
+              <div
+                style={
+                  styles.actionRow
+                }
+              >
+                <a
+                  href={
+                    lesson.fileUrl
+                  }
+                  target="_blank"
+                  rel="noreferrer"
+                  style={
+                    styles.linkButton
+                  }
+                >
+                  ▶️ Abrir vídeo
+                </a>
+
+                <button
+                  style={
+                    styles.dangerOutlineButton
+                  }
+                  onClick={
+                    handleRemoveFile
+                  }
+                  disabled={
+                    removing
+                  }
+                >
+                  {removing
+                    ? 'Removendo...'
+                    : 'Remover link'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {lesson.type ===
+          'quiz' && (
+          <div
+            style={
+              styles.infoBox
+            }
+          >
+            🧠 Para quizzes, coloque
+            as instruções e o
+            conteúdo no campo acima.
+          </div>
+        )}
+
+        <div
+          style={
+            styles.actionRow
+          }
+        >
+          <button
+            style={
+              styles.primaryButton
+            }
+            onClick={
+              handleSave
+            }
+            disabled={
+              saving
+            }
+          >
+            {saving
+              ? 'Salvando...'
+              : '💾 Salvar aula'}
+          </button>
+
+          <button
+            style={
+              styles.dangerButton
+            }
+            onClick={
+              handleDelete
+            }
+            disabled={
+              deleting
+            }
+          >
+            {deleting
+              ? 'Excluindo...'
+              : '🗑️ Excluir aula'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
-function lessonIcon(
-  type: LessonType
-) {
-  if (
-    type ===
-    'pdf'
-  ) {
-    return '📄';
-  }
-
-  if (
-    type ===
-    'video'
-  ) {
-    return '🎥';
-  }
-
-  return '📝';
-}
-
-function normalizeStatus(
-  value: unknown
-): TeacherStatus {
-  const status =
-    String(
-      value ??
-        'pending'
-    )
-      .trim()
-      .toLowerCase();
-
-  if (
-    status ===
-    'approved'
-  ) {
-    return 'approved';
-  }
-
-  if (
-    status ===
-    'rejected'
-  ) {
-    return 'rejected';
-  }
-
-  return 'pending';
-}
-
-function createSlug(
-  value: string
-) {
-  return value
-    .normalize('NFD')
-    .replace(
-      /[\u0300-\u036f]/g,
-      ''
-    )
-    .toLowerCase()
-    .trim()
-    .replace(
-      /[^a-z0-9]+/g,
-      '-'
-    )
-    .replace(
-      /^-+|-+$/g,
-      '');
-}
-
-function getAverageRating(
-  courses: Course[]
-) {
-  if (
-    courses.length ===
-    0
-  ) {
-    return 0;
-  }
-
-  const ratedCourses =
-    courses.filter(
-      (course) =>
-        course.averageRating >
-        0
-    );
-
-  if (
-    ratedCourses.length ===
-    0
-  ) {
-    return 0;
-  }
-
-  return (
-    ratedCourses.reduce(
-      (
-        total,
-        course
-      ) =>
-        total +
-        course.averageRating,
-      0
-    ) /
-    ratedCourses.length
-  );
-}
-
-const primaryButton = {
-  border:
-    'none',
-  borderRadius:
-    '9px',
-  padding:
-    '12px 18px',
-  background:
-    'linear-gradient(135deg, #00D4FF, #8B5CF6)',
-  color:
-    'white',
-  fontWeight:
-    'bold',
-  cursor:
-    'pointer',
-  marginTop:
-    '15px',
-};
-
-const inputStyle = {
-  width:
-    '100%',
-  boxSizing:
-    'border-box' as const,
-  background:
-    '#080D19',
-  border:
-    '1px solid #29364D',
-  borderRadius:
-    '8px',
-  padding:
-    '12px',
-  color:
-    'white',
-  outline:
-    'none',
-};
-
-const labelStyle = {
-  display:
-    'block',
-  color:
-    '#D1D5DB',
-  fontSize:
-    '13px',
-};
-
-function menuStyle(
-  active: boolean
-) {
-  return {
-    width:
-      '100%',
-    border:
-      'none',
-    borderRadius:
-      '8px',
-    padding:
-      '12px',
-    marginBottom:
-      '5px',
-    textAlign:
-      'left' as const,
-    cursor:
-      'pointer',
+const styles: Record<
+  string,
+  React.CSSProperties
+> = {
+  page: {
+    minHeight: '100vh',
     background:
-      active
-        ? '#17233A'
-        : 'transparent',
+      '#070B14',
+    color: '#FFFFFF',
+    paddingBottom: 60,
+  },
+
+  header: {
+    display: 'flex',
+    justifyContent:
+      'space-between',
+    alignItems: 'center',
+    gap: 24,
+    padding:
+      '32px 5%',
+    borderBottom:
+      '1px solid rgba(255,255,255,0.08)',
+    background:
+      'rgba(7,11,20,0.96)',
+  },
+
+  brand: {
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: 3,
+    color: '#00D4FF',
+    marginBottom: 8,
+  },
+
+  pageTitle: {
+    margin: 0,
+    fontSize: 32,
+    fontWeight: 800,
+  },
+
+  pageSubtitle: {
+    margin:
+      '8px 0 0',
     color:
-      active
-        ? '#00D4FF'
-        : '#9CA3AF',
-    fontWeight:
-      active
-        ? 'bold'
-        : 'normal',
-  };
-}
+      'rgba(255,255,255,0.58)',
+  },
+
+  headerActions: {
+    display: 'flex',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+
+  main: {
+    width: '90%',
+    maxWidth: 1200,
+    margin:
+      '0 auto',
+    paddingTop: 32,
+  },
+
+  tabButton: {
+    border:
+      '1px solid rgba(255,255,255,0.12)',
+    background:
+      'rgba(255,255,255,0.04)',
+    color: '#FFFFFF',
+    padding:
+      '11px 16px',
+    borderRadius: 10,
+    cursor: 'pointer',
+    fontWeight: 700,
+  },
+
+  activeTabButton: {
+    border:
+      '1px solid #00D4FF',
+    background:
+      'rgba(0,212,255,0.12)',
+    color: '#00D4FF',
+    padding:
+      '11px 16px',
+    borderRadius: 10,
+    cursor: 'pointer',
+    fontWeight: 700,
+  },
+
+  centerScreen: {
+    minHeight: '100vh',
+    display: 'flex',
+    justifyContent:
+      'center',
+    alignItems: 'center',
+    background:
+      '#070B14',
+    color: '#FFFFFF',
+    padding: 24,
+  },
+
+  loadingCard: {
+    width: '100%',
+    maxWidth: 460,
+    textAlign: 'center',
+    padding: 40,
+    border:
+      '1px solid rgba(255,255,255,0.1)',
+    borderRadius: 20,
+    background:
+      '#0D1422',
+  },
+
+  statusCard: {
+    width: '100%',
+    maxWidth: 500,
+    textAlign: 'center',
+    padding: 48,
+    border:
+      '1px solid rgba(255,255,255,0.1)',
+    borderRadius: 20,
+    background:
+      '#0D1422',
+  },
+
+  loadingIcon: {
+    fontSize: 48,
+    marginBottom: 20,
+  },
+
+  statusIcon: {
+    fontSize: 56,
+    marginBottom: 20,
+  },
+
+  loadingTitle: {
+    margin:
+      '0 0 10px',
+    fontSize: 24,
+  },
+
+  statusTitle: {
+    margin:
+      '0 0 12px',
+    fontSize: 26,
+  },
+
+  statusText: {
+    color:
+      'rgba(255,255,255,0.65)',
+    lineHeight: 1.6,
+    marginBottom: 24,
+  },
+
+  panel: {
+    background:
+      '#0D1422',
+    border:
+      '1px solid rgba(255,255,255,0.09)',
+    borderRadius: 18,
+    padding: 24,
+  },
+
+  panelHeader: {
+    display: 'flex',
+    justifyContent:
+      'space-between',
+    alignItems: 'center',
+    gap: 20,
+    marginBottom: 24,
+  },
+
+  listHeader: {
+    display: 'flex',
+    justifyContent:
+      'space-between',
+    alignItems: 'center',
+    gap: 20,
+    marginBottom: 24,
+  },
+
+  eyebrow: {
+    display: 'block',
+    color: '#00D4FF',
+    fontSize: 11,
+    fontWeight: 800,
+    letterSpacing: 2,
+    marginBottom: 8,
+  },
+
+  sectionTitle: {
+    margin: 0,
+    fontSize: 28,
+    fontWeight: 800,
+  },
+
+  subsectionTitle: {
+    margin: 0,
+    fontSize: 21,
+    fontWeight: 800,
+  },
+
+  mutedText: {
+    color:
+      'rgba(255,255,255,0.58)',
+    lineHeight: 1.55,
+  },
+
+  form: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+  },
+
+  label: {
+    fontSize: 13,
+    fontWeight: 700,
+    color:
+      'rgba(255,255,255,0.78)',
+    marginTop: 4,
+  },
+
+  input: {
+    width: '100%',
+    boxSizing:
+      'border-box',
+    border:
+      '1px solid rgba(255,255,255,0.12)',
+    background:
+      '#080E19',
+    color: '#FFFFFF',
+    borderRadius: 10,
+    padding:
+      '13px 14px',
+    outline: 'none',
+    fontSize: 14,
+  },
+
+  textarea: {
+    width: '100%',
+    boxSizing:
+      'border-box',
+    border:
+      '1px solid rgba(255,255,255,0.12)',
+    background:
+      '#080E19',
+    color: '#FFFFFF',
+    borderRadius: 10,
+    padding: 14,
+    outline: 'none',
+    resize: 'vertical',
+    fontSize: 14,
+    lineHeight: 1.55,
+  },
+
+  primaryButton: {
+    border: 'none',
+    background:
+      '#00D4FF',
+    color: '#041018',
+    padding:
+      '12px 18px',
+    borderRadius: 10,
+    cursor: 'pointer',
+    fontWeight: 800,
+    whiteSpace:
+      'nowrap',
+  },
+
+  secondaryButton: {
+    border:
+      '1px solid rgba(255,255,255,0.16)',
+    background:
+      'rgba(255,255,255,0.05)',
+    color: '#FFFFFF',
+    padding:
+      '12px 18px',
+    borderRadius: 10,
+    cursor: 'pointer',
+    fontWeight: 700,
+  },
+
+  dangerButton: {
+    border:
+      '1px solid rgba(255,70,90,0.4)',
+    background:
+      'rgba(255,70,90,0.1)',
+    color: '#FF7180',
+    padding:
+      '12px 18px',
+    borderRadius: 10,
+    cursor: 'pointer',
+    fontWeight: 800,
+    whiteSpace:
+      'nowrap',
+  },
+
+  dangerOutlineButton: {
+    border:
+      '1px solid rgba(255,70,90,0.35)',
+    background:
+      'transparent',
+    color: '#FF7180',
+    padding:
+      '9px 13px',
+    borderRadius: 8,
+    cursor: 'pointer',
+    fontWeight: 700,
+  },
+
+  linkButton: {
+    display:
+      'inline-flex',
+    alignItems:
+      'center',
+    textDecoration:
+      'none',
+    border:
+      '1px solid rgba(0,212,255,0.35)',
+    background:
+      'rgba(0,212,255,0.08)',
+    color: '#00D4FF',
+    padding:
+      '9px 13px',
+    borderRadius: 8,
+    fontWeight: 700,
+  },
+
+  backButton: {
+    border:
+      '1px solid rgba(255,255,255,0.12)',
+    background:
+      'rgba(255,255,255,0.04)',
+    color: '#FFFFFF',
+    padding:
+      '10px 14px',
+    borderRadius: 9,
+    cursor: 'pointer',
+    fontWeight: 700,
+  },
+
+  editorTop: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 18,
+    marginBottom: 24,
+  },
+
+  courseGrid: {
+    display: 'grid',
+    gridTemplateColumns:
+      'repeat(auto-fit, minmax(280px, 1fr))',
+    gap: 18,
+  },
+
+  courseCard: {
+    display: 'flex',
+    alignItems:
+      'flex-start',
+    gap: 16,
+    textAlign: 'left',
+    width: '100%',
+    border:
+      '1px solid rgba(255,255,255,0.09)',
+    background:
+      '#0D1422',
+    color: '#FFFFFF',
+    borderRadius: 16,
+    padding: 18,
+    cursor: 'pointer',
+  },
+
+  courseIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    display: 'flex',
+    alignItems:
+      'center',
+    justifyContent:
+      'center',
+    fontSize: 26,
+    flexShrink: 0,
+  },
+
+  courseCardContent: {
+    minWidth: 0,
+    flex: 1,
+  },
+
+  courseStatus: {
+    fontSize: 11,
+    color:
+      'rgba(255,255,255,0.55)',
+    marginBottom: 6,
+  },
+
+  courseTitle: {
+    margin:
+      '0 0 7px',
+    fontSize: 18,
+    fontWeight: 800,
+  },
+
+  courseDescription: {
+    margin:
+      '0 0 14px',
+    color:
+      'rgba(255,255,255,0.58)',
+    fontSize: 13,
+    lineHeight: 1.45,
+  },
+
+  courseMeta: {
+    display: 'flex',
+    gap: 10,
+    flexWrap: 'wrap',
+    color:
+      'rgba(255,255,255,0.65)',
+    fontSize: 12,
+  },
+
+  emptyState: {
+    textAlign: 'center',
+    padding: 60,
+    border:
+      '1px dashed rgba(255,255,255,0.14)',
+    borderRadius: 18,
+    marginBottom: 20,
+  },
+
+  emptyIcon: {
+    fontSize: 52,
+    marginBottom: 12,
+  },
+
+  emptyTitle: {
+    margin:
+      '0 0 8px',
+    fontSize: 20,
+  },
+
+  statsGrid: {
+    display: 'grid',
+    gridTemplateColumns:
+      'repeat(3, 1fr)',
+    gap: 12,
+    marginTop: 14,
+  },
+
+  statCard: {
+    padding: 16,
+    border:
+      '1px solid rgba(255,255,255,0.08)',
+    background:
+      '#080E19',
+    borderRadius: 12,
+  },
+
+  statNumber: {
+    display: 'block',
+    fontSize: 21,
+    marginBottom: 4,
+  },
+
+  statLabel: {
+    color:
+      'rgba(255,255,255,0.5)',
+    fontSize: 12,
+  },
+
+  switchLabel: {
+    display: 'flex',
+    alignItems:
+      'center',
+    gap: 9,
+    fontWeight: 700,
+    cursor: 'pointer',
+  },
+
+  actionRow: {
+    display: 'flex',
+    gap: 10,
+    alignItems:
+      'center',
+    flexWrap: 'wrap',
+    marginTop: 18,
+  },
+
+  lessonCard: {
+    border:
+      '1px solid rgba(255,255,255,0.09)',
+    borderRadius: 15,
+    background:
+      '#080E19',
+    marginBottom: 16,
+    overflow: 'hidden',
+  },
+
+  lessonHeader: {
+    display: 'flex',
+    alignItems:
+      'center',
+    gap: 14,
+    padding: 18,
+    borderBottom:
+      '1px solid rgba(255,255,255,0.07)',
+  },
+
+  lessonNumber: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    display: 'flex',
+    alignItems:
+      'center',
+    justifyContent:
+      'center',
+    background:
+      'rgba(0,212,255,0.1)',
+    color: '#00D4FF',
+    fontWeight: 900,
+  },
+
+  lessonHeaderInfo: {
+    minWidth: 0,
+  },
+
+  lessonBadge: {
+    fontSize: 10,
+    fontWeight: 800,
+    color:
+      'rgba(255,255,255,0.5)',
+    letterSpacing: 1,
+  },
+
+  lessonTitle: {
+    margin:
+      '4px 0 0',
+    fontSize: 17,
+    fontWeight: 800,
+  },
+
+  lessonForm: {
+    padding: 18,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
+  },
+
+  twoColumns: {
+    display: 'grid',
+    gridTemplateColumns:
+      'repeat(2, minmax(0, 1fr))',
+    gap: 14,
+  },
+
+  materialBox: {
+    border:
+      '1px solid rgba(0,212,255,0.18)',
+    background:
+      'rgba(0,212,255,0.04)',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 8,
+  },
+
+  materialTitle: {
+    display: 'block',
+    marginBottom: 6,
+  },
+
+  warningText: {
+    color:
+      'rgba(255,193,7,0.9)',
+    fontSize: 12,
+    lineHeight: 1.5,
+  },
+
+  fileInfo: {
+    display: 'flex',
+    alignItems:
+      'center',
+    justifyContent:
+      'space-between',
+    gap: 15,
+    flexWrap: 'wrap',
+    padding: 12,
+    border:
+      '1px solid rgba(255,255,255,0.08)',
+    borderRadius: 10,
+    background:
+      'rgba(0,0,0,0.15)',
+  },
+
+  fileSize: {
+    color:
+      'rgba(255,255,255,0.5)',
+    fontSize: 12,
+  },
+
+  uploadButton: {
+    display:
+      'inline-flex',
+    alignItems:
+      'center',
+    justifyContent:
+      'center',
+    border:
+      '1px dashed rgba(0,212,255,0.45)',
+    background:
+      'rgba(0,212,255,0.07)',
+    color: '#00D4FF',
+    padding:
+      '14px 18px',
+    borderRadius: 10,
+    cursor: 'pointer',
+    fontWeight: 800,
+    width: 'fit-content',
+  },
+
+  hiddenInput: {
+    display: 'none',
+  },
+
+  infoBox: {
+    padding: 14,
+    borderRadius: 10,
+    background:
+      'rgba(255,255,255,0.04)',
+    border:
+      '1px solid rgba(255,255,255,0.08)',
+    color:
+      'rgba(255,255,255,0.65)',
+    fontSize: 13,
+    lineHeight: 1.5,
+  },
+};

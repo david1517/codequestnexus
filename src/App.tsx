@@ -16,9 +16,8 @@ import { Achievements } from '@/pages/Achievements/Achievements';
 import { Lesson } from '@/pages/Lesson/Lesson';
 import { Profile } from '@/pages/Profile/Profile';
 
-import { TeacherDashboard } from '@/pages/Teacher/TeacherDashboard';
-import { AdminDashboard } from '@/pages/Admin/AdminDashboard';
-
+import { TeacherDashboard } from '@/pages/teacher/TeacherDashboard';
+import { AdminDashboard } from '@/pages/admin/AdminDashboard';
 function App() {
   const [notification, setNotification] =
     useState({
