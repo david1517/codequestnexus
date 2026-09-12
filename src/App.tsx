@@ -1,5 +1,13 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import {
+  Routes,
+  Route,
+  Navigate,
+} from 'react-router-dom';
+
+import {
+  useEffect,
+  useState,
+} from 'react';
 
 import { AppShell } from '@/components/layout/AppShell';
 import { ProtectedRoute } from '@/components/layout/ProtectedRoute';
@@ -15,20 +23,26 @@ import { Missions } from '@/pages/Missions/Missions';
 import { Achievements } from '@/pages/Achievements/Achievements';
 import { Lesson } from '@/pages/Lesson/Lesson';
 import { Profile } from '@/pages/Profile/Profile';
+import { Settings } from '@/pages/Settings/Settings';
 
 import { TeacherDashboard } from '@/pages/teacher/TeacherDashboard';
 import { AdminDashboard } from '@/pages/admin/AdminDashboard';
+
 function App() {
-  const [notification, setNotification] =
-    useState({
-      visible: false,
-      type: 'success' as
-        | 'success'
-        | 'warning'
-        | 'error',
-      title: '',
-      message: '',
-    });
+  const [
+    notification,
+    setNotification,
+  ] = useState({
+    visible: false,
+
+    type: 'success' as
+      | 'success'
+      | 'warning'
+      | 'error',
+
+    title: '',
+    message: '',
+  });
 
   const showNotification = (
     type:
@@ -46,163 +60,203 @@ function App() {
     });
 
     setTimeout(() => {
-      setNotification((prev) => ({
-        ...prev,
-        visible: false,
-      }));
+      setNotification(
+        (previous) => ({
+          ...previous,
+          visible: false,
+        })
+      );
     }, 5000);
   };
 
   useEffect(() => {
-    const checkFirebase = async () => {
-      await new Promise((resolve) =>
-        setTimeout(resolve, 1000)
-      );
-
-      const apiKey =
-        import.meta.env.VITE_FIREBASE_API_KEY;
-
-      if (!apiKey) {
-        showNotification(
-          'warning',
-          '💾 Modo Local',
-          'Firebase não configurado. Os dados serão salvos no navegador.'
+    const checkFirebase =
+      async () => {
+        await new Promise(
+          (resolve) =>
+            setTimeout(
+              resolve,
+              1000
+            )
         );
 
-        return;
-      }
+        const apiKey =
+          import.meta.env
+            .VITE_FIREBASE_API_KEY;
 
-      try {
-        const firebase =
-          await import('@/lib/firebase');
-
-        if (firebase.firebaseConnected) {
-          showNotification(
-            'success',
-            '☁️ Firebase Conectado!',
-            'Seus dados serão salvos na nuvem.'
-          );
-        } else {
+        if (!apiKey) {
           showNotification(
             'warning',
-            '⏳ Firebase',
-            'Firebase ainda não está conectado.'
+            '💾 Modo Local',
+            'Firebase não configurado. Os dados serão salvos no navegador.'
+          );
+
+          return;
+        }
+
+        try {
+          const firebase =
+            await import(
+              '@/lib/firebase'
+            );
+
+          if (
+            firebase.firebaseConnected
+          ) {
+            showNotification(
+              'success',
+              '☁️ Firebase Conectado!',
+              'Seus dados serão salvos na nuvem.'
+            );
+          } else {
+            showNotification(
+              'warning',
+              '⏳ Firebase',
+              'Firebase ainda não está conectado.'
+            );
+          }
+        } catch {
+          showNotification(
+            'error',
+            '❌ Erro Firebase',
+            'Verifique o arquivo .env.'
           );
         }
-      } catch {
-        showNotification(
-          'error',
-          '❌ Erro Firebase',
-          'Verifique o arquivo .env.'
-        );
-      }
-    };
+      };
 
     checkFirebase();
   }, []);
 
-  const Notification = () => {
-    if (!notification.visible) {
-      return null;
-    }
+  const Notification =
+    () => {
+      if (
+        !notification.visible
+      ) {
+        return null;
+      }
 
-    const colorMap = {
-      success: '#00FF88',
-      warning: '#FFD700',
-      error: '#FF4444',
-    };
+      const colorMap = {
+        success: '#00FF88',
+        warning: '#FFD700',
+        error: '#FF4444',
+      };
 
-    const iconMap = {
-      success: '☁️',
-      warning: '⚠️',
-      error: '❌',
-    };
+      const iconMap = {
+        success: '☁️',
+        warning: '⚠️',
+        error: '❌',
+      };
 
-    const color =
-      colorMap[notification.type];
+      const color =
+        colorMap[
+          notification.type
+        ];
 
-    return (
-      <div
-        style={{
-          position: 'fixed',
-          top: '20px',
-          right: '20px',
-          background: '#111827',
-          border: `2px solid ${color}`,
-          borderRadius: '10px',
-          padding: '15px 20px',
-          maxWidth: '350px',
-          zIndex: 9999,
-          boxShadow: `0 0 30px ${color}80`,
-          fontFamily: 'sans-serif',
-        }}
-      >
+      return (
         <div
           style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: '12px',
+            position: 'fixed',
+            top: '20px',
+            right: '20px',
+            background: '#111827',
+            border: `2px solid ${color}`,
+            borderRadius: '10px',
+            padding:
+              '15px 20px',
+            maxWidth: '350px',
+            zIndex: 9999,
+            boxShadow: `0 0 30px ${color}80`,
+            fontFamily:
+              'sans-serif',
           }}
         >
           <div
             style={{
-              fontSize: '28px',
+              display: 'flex',
+              alignItems:
+                'flex-start',
+              gap: '12px',
             }}
           >
-            {iconMap[notification.type]}
-          </div>
-
-          <div
-            style={{
-              flex: 1,
-            }}
-          >
-            <h3
+            <div
               style={{
-                color,
-                fontSize: '14px',
-                fontWeight: 'bold',
-                margin: 0,
-                marginBottom: '4px',
+                fontSize: '28px',
               }}
             >
-              {notification.title}
-            </h3>
+              {
+                iconMap[
+                  notification.type
+                ]
+              }
+            </div>
 
-            <p
+            <div
               style={{
-                color: '#D1D5DB',
-                fontSize: '12px',
-                margin: 0,
-                lineHeight: '1.4',
+                flex: 1,
               }}
             >
-              {notification.message}
-            </p>
-          </div>
+              <h3
+                style={{
+                  color,
+                  fontSize: '14px',
+                  fontWeight:
+                    'bold',
+                  margin: 0,
+                  marginBottom:
+                    '4px',
+                }}
+              >
+                {
+                  notification.title
+                }
+              </h3>
 
-          <button
-            onClick={() =>
-              setNotification((prev) => ({
-                ...prev,
-                visible: false,
-              }))
-            }
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: '#9CA3AF',
-              cursor: 'pointer',
-              fontSize: '18px',
-              padding: 0,
-            }}
-          >
-            ×
-          </button>
+              <p
+                style={{
+                  color:
+                    '#D1D5DB',
+                  fontSize:
+                    '12px',
+                  margin: 0,
+                  lineHeight:
+                    '1.4',
+                }}
+              >
+                {
+                  notification.message
+                }
+              </p>
+            </div>
+
+            <button
+              onClick={() =>
+                setNotification(
+                  (previous) => ({
+                    ...previous,
+                    visible:
+                      false,
+                  })
+                )
+              }
+              style={{
+                background:
+                  'transparent',
+                border: 'none',
+                color:
+                  '#9CA3AF',
+                cursor:
+                  'pointer',
+                fontSize:
+                  '18px',
+                padding: 0,
+              }}
+            >
+              ×
+            </button>
+          </div>
         </div>
-      </div>
-    );
-  };
+      );
+    };
 
   return (
     <>
@@ -211,24 +265,34 @@ function App() {
       <Routes>
         <Route
           path="/"
-          element={<Landing />}
+          element={
+            <Landing />
+          }
         />
 
         <Route
           path="/auth/login"
-          element={<Login />}
+          element={
+            <Login />
+          }
         />
 
         <Route
           path="/auth/register"
-          element={<Register />}
+          element={
+            <Register />
+          }
         />
 
         <Route
           path="/teacher"
           element={
             <ProtectedRoute>
-              <RoleRoute allowedRoles={['teacher']}>
+              <RoleRoute
+                allowedRoles={[
+                  'teacher',
+                ]}
+              >
                 <TeacherDashboard />
               </RoleRoute>
             </ProtectedRoute>
@@ -239,7 +303,11 @@ function App() {
           path="/admin"
           element={
             <ProtectedRoute>
-              <RoleRoute allowedRoles={['admin']}>
+              <RoleRoute
+                allowedRoles={[
+                  'admin',
+                ]}
+              >
                 <AdminDashboard />
               </RoleRoute>
             </ProtectedRoute>
@@ -255,32 +323,44 @@ function App() {
         >
           <Route
             path="/dashboard"
-            element={<Dashboard />}
+            element={
+              <Dashboard />
+            }
           />
 
           <Route
             path="/galaxy"
-            element={<Galaxy />}
+            element={
+              <Galaxy />
+            }
           />
 
           <Route
             path="/missions"
-            element={<Missions />}
+            element={
+              <Missions />
+            }
           />
 
           <Route
             path="/achievements"
-            element={<Achievements />}
+            element={
+              <Achievements />
+            }
           />
 
           <Route
             path="/lesson/:courseSlug/:lessonId"
-            element={<Lesson />}
+            element={
+              <Lesson />
+            }
           />
 
           <Route
             path="/profile"
-            element={<Profile />}
+            element={
+              <Profile />
+            }
           />
 
           <Route
@@ -293,7 +373,7 @@ function App() {
           <Route
             path="/settings"
             element={
-              <Placeholder title="Ajustes" />
+              <Settings />
             }
           />
         </Route>
@@ -320,19 +400,26 @@ function Placeholder({
   return (
     <div
       style={{
-        minHeight: '60vh',
+        minHeight:
+          '60vh',
         display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
+        flexDirection:
+          'column',
+        alignItems:
+          'center',
+        justifyContent:
+          'center',
         color: 'white',
-        textAlign: 'center',
+        textAlign:
+          'center',
       }}
     >
       <h1
         style={{
-          fontSize: '32px',
-          fontWeight: 'bold',
+          fontSize:
+            '32px',
+          fontWeight:
+            'bold',
         }}
       >
         {title}
@@ -340,8 +427,10 @@ function Placeholder({
 
       <p
         style={{
-          color: '#9CA3AF',
-          marginTop: '10px',
+          color:
+            '#9CA3AF',
+          marginTop:
+            '10px',
         }}
       >
         Em construção

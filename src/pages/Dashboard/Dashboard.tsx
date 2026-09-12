@@ -1,275 +1,800 @@
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '@/stores/useAuthStore';
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  collection,
+  onSnapshot,
+  query,
+  where,
+} from 'firebase/firestore';
+
+import { db } from '@/lib/firebase';
 import { getAllCourses } from '@/data/courses';
 import { MISSIONS } from '@/data/missions';
 import { ACHIEVEMENTS } from '@/data/achievements';
+import { useProgress } from '@/hooks/useProgress';
 
-const STORAGE_KEY = 'codequest-progress-direct';
+type LessonType = 'pdf' | 'word' | 'video' | 'quiz';
+
+interface Lesson {
+  id: string;
+  title: string;
+  description?: string;
+  type: LessonType;
+  content?: string;
+  duration?: number;
+  xpReward?: number;
+  fileName?: string;
+  fileUrl?: string;
+  fileSize?: number;
+  fileType?: string;
+}
+
+interface Course {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  icon: string;
+  color: string;
+  lessons: Lesson[];
+  teacherId: string;
+  published: boolean;
+  views: number;
+  averageRating: number;
+  ratingsCount: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function normalizeLesson(
+  value: unknown,
+  index: number
+): Lesson {
+  if (!isRecord(value)) {
+    return {
+      id: `lesson-${index + 1}`,
+      title: `Aula ${index + 1}`,
+      description: '',
+      type: 'pdf',
+      content: '',
+      xpReward: 0,
+    };
+  }
+
+  const rawType = value.type;
+
+  const type: LessonType =
+    rawType === 'word' ||
+    rawType === 'video' ||
+    rawType === 'quiz'
+      ? rawType
+      : 'pdf';
+
+  return {
+    id:
+      typeof value.id === 'string'
+        ? value.id
+        : `lesson-${index + 1}`,
+
+    title:
+      typeof value.title === 'string'
+        ? value.title
+        : `Aula ${index + 1}`,
+
+    description:
+      typeof value.description === 'string'
+        ? value.description
+        : '',
+
+    type,
+
+    content:
+      typeof value.content === 'string'
+        ? value.content
+        : '',
+
+    duration:
+      typeof value.duration === 'number'
+        ? value.duration
+        : undefined,
+
+    xpReward:
+      typeof value.xpReward === 'number'
+        ? value.xpReward
+        : 0,
+
+    fileName:
+      typeof value.fileName === 'string'
+        ? value.fileName
+        : undefined,
+
+    fileUrl:
+      typeof value.fileUrl === 'string'
+        ? value.fileUrl
+        : undefined,
+
+    fileSize:
+      typeof value.fileSize === 'number'
+        ? value.fileSize
+        : undefined,
+
+    fileType:
+      typeof value.fileType === 'string'
+        ? value.fileType
+        : undefined,
+  };
+}
+
+function normalizeCourse(
+  id: string,
+  value: Record<string, unknown>
+): Course {
+  const lessons = Array.isArray(value.lessons)
+    ? value.lessons.map(normalizeLesson)
+    : [];
+
+  return {
+    id,
+
+    slug:
+      typeof value.slug === 'string' &&
+      value.slug.trim()
+        ? value.slug
+        : id,
+
+    name:
+      typeof value.name === 'string' &&
+      value.name.trim()
+        ? value.name
+        : 'Curso sem nome',
+
+    description:
+      typeof value.description === 'string'
+        ? value.description
+        : '',
+
+    icon:
+      typeof value.icon === 'string'
+        ? value.icon
+        : '📚',
+
+    color:
+      typeof value.color === 'string'
+        ? value.color
+        : '#00D4FF',
+
+    lessons,
+
+    teacherId:
+      typeof value.teacherId === 'string'
+        ? value.teacherId
+        : '',
+
+    published: value.published === true,
+
+    views:
+      typeof value.views === 'number'
+        ? value.views
+        : 0,
+
+    averageRating:
+      typeof value.averageRating === 'number'
+        ? value.averageRating
+        : 0,
+
+    ratingsCount:
+      typeof value.ratingsCount === 'number'
+        ? value.ratingsCount
+        : 0,
+  };
+}
+
+function getLocalFallbackCourses(): Course[] {
+  return getAllCourses().map((course) => ({
+    id: course.id,
+    slug: course.slug,
+    name: course.name,
+    description: course.description,
+    icon: course.icon,
+    color: course.color,
+
+    lessons: course.lessons.map((lesson) => {
+      const rawLesson =
+        lesson as unknown as Record<string, unknown>;
+
+      const rawType = rawLesson.type;
+
+      const type: LessonType =
+        rawType === 'word' ||
+        rawType === 'video' ||
+        rawType === 'quiz'
+          ? rawType
+          : 'pdf';
+
+      return {
+        id: lesson.id,
+        title: lesson.title,
+        description: lesson.description,
+        type,
+        content: lesson.content,
+        duration: lesson.duration,
+        xpReward: lesson.xpReward,
+
+        fileName:
+          typeof rawLesson.fileName === 'string'
+            ? rawLesson.fileName
+            : undefined,
+
+        fileUrl:
+          typeof rawLesson.fileUrl === 'string'
+            ? rawLesson.fileUrl
+            : undefined,
+
+        fileSize:
+          typeof rawLesson.fileSize === 'number'
+            ? rawLesson.fileSize
+            : undefined,
+
+        fileType:
+          typeof rawLesson.fileType === 'string'
+            ? rawLesson.fileType
+            : undefined,
+      };
+    }),
+
+    teacherId: '',
+    published: true,
+    views: 0,
+    averageRating: 0,
+    ratingsCount: 0,
+  }));
+}
+
+function getCourseProgress(
+  course: Course,
+  completedLessons: Set<string>
+) {
+  const total = course.lessons.length;
+
+  if (total === 0) {
+    return {
+      completed: 0,
+      percent: 0,
+    };
+  }
+
+  const completed = course.lessons.filter(
+    (lesson) =>
+      completedLessons.has(lesson.id)
+  ).length;
+
+  return {
+    completed,
+    percent: Math.round(
+      (completed / total) * 100
+    ),
+  };
+}
+
+function getLevelData(xp: number) {
+  const safeXp = Math.max(0, xp);
+
+  const xpForLevel = (level: number) =>
+    100 * Math.pow(level, 1.5);
+
+  let level = 1;
+  let xpSpent = 0;
+
+  for (
+    let current = 1;
+    current <= 100;
+    current++
+  ) {
+    const needed = xpForLevel(current);
+
+    if (
+      safeXp >=
+      xpSpent + needed
+    ) {
+      xpSpent += needed;
+      level = current + 1;
+    } else {
+      break;
+    }
+  }
+
+  const xpIntoLevel = Math.max(
+    0,
+    safeXp - xpSpent
+  );
+
+  const xpNeededForNextLevel =
+    xpForLevel(level);
+
+  const percent =
+    xpNeededForNextLevel > 0
+      ? Math.min(
+          100,
+          Math.round(
+            (xpIntoLevel /
+              xpNeededForNextLevel) *
+              100
+          )
+        )
+      : 0;
+
+  return {
+    level,
+    xpIntoLevel,
+    xpNeededForNextLevel,
+    percent,
+  };
+}
 
 export function Dashboard() {
   const { user } = useAuthStore();
-  const [progress, setProgress] = useState({
-    completedLessons: [] as string[],
-    xp: 0,
-    downloadedLessons: [] as string[],
-  });
 
-  const loadProgress = () => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const data = JSON.parse(stored);
-        setProgress({
-          completedLessons: data.completedLessons || [],
-          xp: data.xp || 0,
-          downloadedLessons: data.downloadedLessons || [],
-        });
-      }
-    } catch (err) {
-      console.error(err);
+  /*
+   * IMPORTANTE:
+   * O Dashboard agora usa exatamente o mesmo
+   * progresso utilizado pelo Lesson.
+   *
+   * Não existe mais leitura direta de:
+   * codequest-progress-direct
+   *
+   * O progresso vem de:
+   * users/{userId}/progress/main
+   */
+  const {
+    progress,
+    loading: progressLoading,
+  } = useProgress();
+
+  const [courses, setCourses] =
+    useState<Course[]>([]);
+
+  const [coursesLoading, setCoursesLoading] =
+    useState(true);
+
+  const [coursesError, setCoursesError] =
+    useState('');
+
+  /*
+   * Carrega somente cursos publicados.
+   */
+  useEffect(() => {
+    if (!user) {
+      setCourses([]);
+      setCoursesLoading(false);
+      return;
     }
-  };
 
-  useEffect(() => {
-    loadProgress();
-  }, []);
+    if (!db) {
+      setCourses(
+        getLocalFallbackCourses()
+      );
 
-  // Recarrega quando volta pra página
-  useEffect(() => {
-    const handleFocus = () => loadProgress();
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, []);
+      setCoursesLoading(false);
+      setCoursesError('');
+
+      return;
+    }
+
+    setCoursesLoading(true);
+    setCoursesError('');
+
+    const coursesQuery = query(
+      collection(db, 'courses'),
+      where(
+        'published',
+        '==',
+        true
+      )
+    );
+
+    const unsubscribe = onSnapshot(
+      coursesQuery,
+
+      (snapshot) => {
+        const loaded = snapshot.docs
+          .map((item) =>
+            normalizeCourse(
+              item.id,
+              item.data()
+            )
+          )
+          .filter(
+            (course) =>
+              course.lessons.length > 0
+          );
+
+        setCourses(loaded);
+        setCoursesLoading(false);
+        setCoursesError('');
+      },
+
+      (error) => {
+        console.error(
+          'Erro ao carregar cursos publicados:',
+          error
+        );
+
+        setCourses([]);
+        setCoursesLoading(false);
+
+        setCoursesError(
+          'Não foi possível carregar os cursos publicados.'
+        );
+      }
+    );
+
+    return () => unsubscribe();
+  }, [user?.id]);
+
+  /*
+   * Todos estes números agora vêm do useProgress().
+   */
+  const totalCompleted =
+    progress.completedLessons.length;
+
+  const totalDownloaded =
+    progress.downloadedLessons.length;
+
+  const levelData = useMemo(
+    () =>
+      getLevelData(progress.xp),
+    [progress.xp]
+  );
+
+  const completedSet = useMemo(
+    () =>
+      new Set(
+        progress.completedLessons
+      ),
+    [progress.completedLessons]
+  );
+
+  const coursesWithProgress = useMemo(
+    () =>
+      courses.map((course) => ({
+        ...course,
+
+        progress:
+          getCourseProgress(
+            course,
+            completedSet
+          ),
+      })),
+    [courses, completedSet]
+  );
+
+  const coursesInProgress =
+    coursesWithProgress
+      .filter(
+        (course) =>
+          course.progress.percent > 0 &&
+          course.progress.percent < 100
+      )
+      .slice(0, 3);
+
+  const activeCoursesCount =
+    coursesWithProgress.filter(
+      (course) =>
+        course.progress.percent > 0
+    ).length;
+
+  /*
+   * Próxima aula.
+   */
+  const nextLesson = useMemo(() => {
+    const started =
+      coursesWithProgress.filter(
+        (course) =>
+          course.progress.percent > 0 &&
+          course.progress.percent < 100
+      );
+
+    const ordered = [
+      ...started,
+
+      ...coursesWithProgress.filter(
+        (course) =>
+          !started.some(
+            (item) =>
+              item.id === course.id
+          )
+      ),
+    ];
+
+    for (const course of ordered) {
+      const lesson =
+        course.lessons.find(
+          (item) =>
+            !completedSet.has(
+              item.id
+            )
+        );
+
+      if (lesson) {
+        return {
+          course,
+          lesson,
+        };
+      }
+    }
+
+    return null;
+  }, [
+    coursesWithProgress,
+    completedSet,
+  ]);
+
+  /*
+   * Missões.
+   */
+  const dailyMissions =
+    MISSIONS
+      .filter(
+        (mission) =>
+          mission.type === 'daily'
+      )
+      .map((mission) => {
+        let current = 0;
+
+        if (
+          mission.id === 'm1' ||
+          mission.id === 'm2'
+        ) {
+          current =
+            totalCompleted;
+        }
+
+        if (mission.id === 'm3') {
+          current =
+            coursesWithProgress.filter(
+              (course) =>
+                course.progress.percent > 0
+            ).length;
+        }
+
+        return {
+          ...mission,
+
+          progress:
+            Math.min(
+              current,
+              mission.target
+            ),
+
+          completed:
+            current >=
+            mission.target,
+        };
+      });
+
+  /*
+   * Conquistas.
+   */
+  const recentAchievements =
+    ACHIEVEMENTS
+      .slice(0, 4)
+      .map((achievement) => {
+        let current = 0;
+
+        if (
+          achievement.criteria.type ===
+          'lessons_completed'
+        ) {
+          current =
+            totalCompleted;
+        }
+
+        if (
+          achievement.criteria.type ===
+          'xp_earned'
+        ) {
+          current =
+            progress.xp;
+        }
+
+        if (
+          achievement.criteria.type ===
+          'downloads'
+        ) {
+          current =
+            totalDownloaded;
+        }
+
+        return {
+          ...achievement,
+
+          unlocked:
+            current >=
+            achievement.criteria.target,
+        };
+      });
 
   if (!user) {
     return (
-      <div style={{ padding: '40px', color: 'white', textAlign: 'center' }}>
-        <p>Carregando...</p>
+      <div style={styles.center}>
+        <p>
+          Carregando usuário...
+        </p>
       </div>
     );
   }
 
-  const totalCompleted = progress.completedLessons.length;
-  const totalDownloaded = progress.downloadedLessons.length;
-  const allCourses = getAllCourses();
-
-  // Cálculos de nível
-  const xpForLevel = (lvl: number) => 100 * Math.pow(lvl, 1.5);
-  let currentLevel = 1;
-  let totalXpNeeded = 0;
-  for (let i = 1; i <= 100; i++) {
-    const needed = xpForLevel(i);
-    if (progress.xp >= totalXpNeeded + needed) {
-      totalXpNeeded += needed;
-      currentLevel = i + 1;
-    } else break;
+  /*
+   * Enquanto o progresso individual está
+   * sendo carregado, evitamos mostrar números
+   * temporários errados.
+   */
+  if (progressLoading) {
+    return (
+      <div style={styles.center}>
+        <p>
+          Carregando seu progresso...
+        </p>
+      </div>
+    );
   }
-  const xpInCurrentLevel = progress.xp - totalXpNeeded;
-  const xpToNextLevel = xpForLevel(currentLevel);
-  const levelProgressPercent = (xpInCurrentLevel / xpToNextLevel) * 100;
-
-  // Missões dinâmicas
-  const dailyMissions = MISSIONS.filter((m) => m.type === 'daily').map((m) => {
-    let prog = 0;
-    if (m.id === 'm1' || m.id === 'm2') prog = totalCompleted;
-    if (m.id === 'm3')
-      prog = new Set(progress.completedLessons.map((id) => id.split('-')[0])).size;
-    return { ...m, progress: Math.min(prog, m.target), completed: prog >= m.target };
-  });
-
-  // Conquistas dinâmicas
-  const recentAchievements = ACHIEVEMENTS.slice(0, 4).map((a) => {
-    let currentValue = 0;
-    if (a.criteria.type === 'lessons_completed') currentValue = totalCompleted;
-    if (a.criteria.type === 'xp_earned') currentValue = progress.xp;
-    if (a.criteria.type === 'downloads') currentValue = totalDownloaded;
-    return { ...a, unlocked: currentValue >= a.criteria.target };
-  });
-
-  // Cursos em progresso
-  const coursesInProgress = allCourses
-    .map((c) => ({
-      ...c,
-      percent: (() => {
-        const done = progress.completedLessons.filter((id) =>
-          id.startsWith(`${c.slug}-`)
-        ).length;
-        return c.totalLessons > 0 ? Math.round((done / c.totalLessons) * 100) : 0;
-      })(),
-    }))
-    .filter((c) => c.percent > 0 && c.percent < 100)
-    .slice(0, 3);
-
-  // Próxima lição
-  const nextLesson = (() => {
-    for (const course of allCourses) {
-      const next = course.lessons.find((l) => !progress.completedLessons.includes(l.id));
-      if (next) return { course, lesson: next };
-    }
-    return null;
-  })();
 
   return (
-    <div style={{ padding: '20px', color: 'white', fontFamily: 'sans-serif' }}>
-      {/* HEADER */}
-      <div style={{ marginBottom: '30px' }}>
-        <p style={{ color: '#9CA3AF', fontSize: '14px' }}>
-          {new Date().toLocaleDateString('pt-BR', {
-            weekday: 'long',
-            day: 'numeric',
-            month: 'long',
-          })}
+    <div style={styles.page}>
+      <div style={styles.header}>
+        <p style={styles.date}>
+          {new Date().toLocaleDateString(
+            'pt-BR',
+            {
+              weekday: 'long',
+              day: 'numeric',
+              month: 'long',
+            }
+          )}
         </p>
-        <h1 style={{ fontSize: '32px', fontWeight: 'bold', marginTop: '5px' }}>
-          Bem-vindo, <span style={{ color: '#00D4FF' }}>{user.username}</span>!
+
+        <h1 style={styles.title}>
+          Bem-vindo,{' '}
+          <span style={styles.cyan}>
+            {user.username}
+          </span>
+          !
         </h1>
-        <p style={{ color: '#9CA3AF', fontSize: '14px', marginTop: '5px' }}>
-          {user.title} • Nível {currentLevel}
+
+        <p style={styles.subtitle}>
+          {user.title} • Nível{' '}
+          {levelData.level}
         </p>
       </div>
 
-      {/* ESTATÍSTICAS */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-          gap: '15px',
-          marginBottom: '30px',
-        }}
-      >
+      <div style={styles.statsGrid}>
         <div
           style={{
-            background: '#111827',
-            border: '1px solid #00D4FF40',
-            borderRadius: '10px',
-            padding: '20px',
+            ...styles.statCard,
+            borderColor:
+              '#00D4FF40',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-            <div style={{ fontSize: '24px' }}>⚡</div>
-            <div>
-              <p style={{ color: '#9CA3AF', fontSize: '12px' }}>XP Total</p>
-              <p style={{ color: '#00D4FF', fontSize: '24px', fontWeight: 'bold' }}>
-                {progress.xp.toLocaleString()}
-              </p>
-            </div>
+          <div style={styles.statIcon}>
+            ⚡
           </div>
-          <div
-            style={{
-              background: '#1F2937',
-              borderRadius: '10px',
-              height: '6px',
-              overflow: 'hidden',
-            }}
-          >
+
+          <div>
+            <p style={styles.statLabel}>
+              XP Total
+            </p>
+
+            <p
+              style={{
+                ...styles.statValue,
+                color: '#00D4FF',
+              }}
+            >
+              {progress.xp.toLocaleString(
+                'pt-BR'
+              )}
+            </p>
+          </div>
+
+          <div style={styles.progressTrack}>
             <div
               style={{
-                background: 'linear-gradient(90deg, #00D4FF, #8B5CF6)',
-                height: '100%',
-                width: `${Math.min(levelProgressPercent, 100)}%`,
+                ...styles.progressFill,
+                width: `${levelData.percent}%`,
+                background:
+                  'linear-gradient(90deg, #00D4FF, #8B5CF6)',
               }}
             />
           </div>
-          <p style={{ color: '#9CA3AF', fontSize: '11px', marginTop: '5px' }}>
-            {Math.floor(xpInCurrentLevel)} / {Math.floor(xpToNextLevel)} para o nível {currentLevel + 1}
+
+          <p style={styles.progressText}>
+            {Math.floor(
+              levelData.xpIntoLevel
+            )}{' '}
+            /{' '}
+            {Math.floor(
+              levelData.xpNeededForNextLevel
+            )}{' '}
+            para o nível{' '}
+            {levelData.level + 1}
           </p>
         </div>
 
-        <div
-          style={{
-            background: '#111827',
-            border: '1px solid #00FF8840',
-            borderRadius: '10px',
-            padding: '20px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '15px',
-          }}
-        >
-          <div style={{ fontSize: '40px' }}>✓</div>
-          <div>
-            <p style={{ color: '#9CA3AF', fontSize: '12px' }}>Lições Completas</p>
-            <p style={{ color: '#00FF88', fontSize: '28px', fontWeight: 'bold' }}>{totalCompleted}</p>
-          </div>
-        </div>
+        <StatCard
+          icon="✓"
+          label="Lições Completas"
+          value={totalCompleted}
+          color="#00FF88"
+        />
 
-        <div
-          style={{
-            background: '#111827',
-            border: '1px solid #8B5CF640',
-            borderRadius: '10px',
-            padding: '20px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '15px',
-          }}
-        >
-          <div style={{ fontSize: '40px' }}>📄</div>
-          <div>
-            <p style={{ color: '#9CA3AF', fontSize: '12px' }}>PDFs Baixados</p>
-            <p style={{ color: '#8B5CF6', fontSize: '28px', fontWeight: 'bold' }}>{totalDownloaded}</p>
-          </div>
-        </div>
+        <StatCard
+          icon="📄"
+          label="PDFs Baixados"
+          value={totalDownloaded}
+          color="#8B5CF6"
+        />
 
-        <div
-          style={{
-            background: '#111827',
-            border: '1px solid #FFD70040',
-            borderRadius: '10px',
-            padding: '20px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '15px',
-          }}
-        >
-          <div style={{ fontSize: '40px' }}>🚀</div>
-          <div>
-            <p style={{ color: '#9CA3AF', fontSize: '12px' }}>Cursos Ativos</p>
-            <p style={{ color: '#FFD700', fontSize: '28px', fontWeight: 'bold' }}>
-              {new Set(progress.completedLessons.map((id) => id.split('-')[0])).size}
-            </p>
-          </div>
-        </div>
+        <StatCard
+          icon="🚀"
+          label="Cursos Ativos"
+          value={activeCoursesCount}
+          color="#FFD700"
+        />
       </div>
 
-      {/* CONTINUE APRENDENDO */}
       {nextLesson && (
         <div
           style={{
-            background: '#111827',
-            border: `2px solid ${nextLesson.course.color}`,
-            borderRadius: '10px',
-            padding: '25px',
-            marginBottom: '20px',
-            boxShadow: `0 0 30px ${nextLesson.course.color}40`,
+            ...styles.continueCard,
+            borderColor:
+              nextLesson.course.color,
+            boxShadow:
+              `0 0 30px ${nextLesson.course.color}40`,
           }}
         >
-          <h2 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '15px' }}>
+          <h2 style={styles.sectionTitle}>
             ⚡ Continue Aprendendo
           </h2>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
-            <div style={{ fontSize: '50px' }}>{nextLesson.course.icon}</div>
-            <div style={{ flex: 1, minWidth: '200px' }}>
-              <p style={{ color: nextLesson.course.color, fontSize: '12px', textTransform: 'uppercase', fontWeight: 'bold' }}>
+
+          <div style={styles.continueContent}>
+            <div
+              style={
+                styles.courseIconLarge
+              }
+            >
+              {nextLesson.course.icon}
+            </div>
+
+            <div style={styles.continueInfo}>
+              <p
+                style={{
+                  ...styles.eyebrow,
+                  color:
+                    nextLesson.course.color,
+                }}
+              >
                 {nextLesson.course.name}
               </p>
-              <h3 style={{ fontSize: '20px', fontWeight: 'bold', marginTop: '5px' }}>
+
+              <h3 style={styles.lessonTitle}>
                 {nextLesson.lesson.title}
               </h3>
-              <p style={{ color: '#9CA3AF', fontSize: '13px', marginTop: '5px' }}>
-                {nextLesson.lesson.description}
+
+              <p style={styles.description}>
+                {nextLesson.lesson.description ||
+                  'Continue sua jornada de aprendizado.'}
               </p>
             </div>
+
             <Link
               to={`/lesson/${nextLesson.course.slug}/${nextLesson.lesson.id}`}
               style={{
-                padding: '12px 24px',
-                background: nextLesson.course.color,
-                color: 'black',
-                borderRadius: '5px',
-                textDecoration: 'none',
-                fontWeight: 'bold',
+                ...styles.primaryButton,
+                background:
+                  nextLesson.course.color,
               }}
             >
               Continuar →
@@ -278,208 +803,790 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* GRID DE CONTEÚDO */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))',
-          gap: '20px',
-        }}
-      >
-        {/* MISSÕES */}
-        <div
-          style={{
-            background: '#111827',
-            border: '1px solid #1F2937',
-            borderRadius: '10px',
-            padding: '25px',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '15px',
-            }}
-          >
-            <h2 style={{ fontSize: '18px', fontWeight: 'bold' }}>🎯 Missões Diárias</h2>
-            <Link to="/missions" style={{ color: '#00D4FF', fontSize: '12px', textDecoration: 'none' }}>
+      <div style={styles.contentGrid}>
+        <section style={styles.card}>
+          <div style={styles.cardHeader}>
+            <h2 style={styles.sectionTitle}>
+              🎯 Missões Diárias
+            </h2>
+
+            <Link
+              to="/missions"
+              style={styles.link}
+            >
               Ver todas →
             </Link>
           </div>
 
-          {dailyMissions.slice(0, 3).map((m) => {
-            const percent = (m.progress / m.target) * 100;
-            return (
-              <div
-                key={m.id}
-                style={{
-                  padding: '12px',
-                  background: '#0A1020',
-                  borderRadius: '8px',
-                  marginBottom: '10px',
-                  border: m.completed ? '1px solid #00FF88' : '1px solid #1F2937',
-                }}
-              >
+          {dailyMissions
+            .slice(0, 3)
+            .map((mission) => {
+              const percent =
+                mission.target > 0
+                  ? (mission.progress /
+                      mission.target) *
+                    100
+                  : 0;
+
+              return (
                 <div
+                  key={mission.id}
                   style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    marginBottom: '8px',
-                  }}
-                >
-                  <p style={{ fontSize: '13px', fontWeight: 'bold' }}>{m.title}</p>
-                  <span style={{ color: '#FFD700', fontSize: '12px', fontWeight: 'bold' }}>
-                    +{m.xpReward} XP
-                  </span>
-                </div>
-                <div
-                  style={{
-                    background: '#1F2937',
-                    borderRadius: '10px',
-                    height: '5px',
-                    overflow: 'hidden',
+                    ...styles.mission,
+                    borderColor:
+                      mission.completed
+                        ? '#00FF88'
+                        : '#1F2937',
                   }}
                 >
                   <div
-                    style={{
-                      background: m.completed
-                        ? 'linear-gradient(90deg, #00FF88, #10B981)'
-                        : 'linear-gradient(90deg, #00D4FF, #8B5CF6)',
-                      height: '100%',
-                      width: `${percent}%`,
-                    }}
-                  />
-                </div>
-                <p style={{ color: '#9CA3AF', fontSize: '11px', marginTop: '5px' }}>
-                  {m.progress}/{m.target}
-                </p>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* CONQUISTAS */}
-        <div
-          style={{
-            background: '#111827',
-            border: '1px solid #1F2937',
-            borderRadius: '10px',
-            padding: '25px',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '15px',
-            }}
-          >
-            <h2 style={{ fontSize: '18px', fontWeight: 'bold' }}>🏆 Conquistas</h2>
-            <Link to="/achievements" style={{ color: '#FFD700', fontSize: '12px', textDecoration: 'none' }}>
-              Ver todas →
-            </Link>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
-            {recentAchievements.map((a) => (
-              <div
-                key={a.id}
-                style={{
-                  textAlign: 'center',
-                  padding: '10px',
-                  background: '#0A1020',
-                  borderRadius: '8px',
-                  opacity: a.unlocked ? 1 : 0.4,
-                }}
-              >
-                <div style={{ fontSize: '30px' }}>{a.unlocked ? a.icon : '🔒'}</div>
-                <p style={{ fontSize: '10px', marginTop: '5px', color: '#9CA3AF' }}>{a.name}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* CURSOS EM PROGRESSO */}
-        {coursesInProgress.length > 0 && (
-          <div
-            style={{
-              background: '#111827',
-              border: '1px solid #1F2937',
-              borderRadius: '10px',
-              padding: '25px',
-              gridColumn: 'span 2',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: '15px',
-              }}
-            >
-              <h2 style={{ fontSize: '18px', fontWeight: 'bold' }}>📚 Cursos em Progresso</h2>
-              <Link to="/galaxy" style={{ color: '#00D4FF', fontSize: '12px', textDecoration: 'none' }}>
-                Ver mais →
-              </Link>
-            </div>
-
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                gap: '15px',
-              }}
-            >
-              {coursesInProgress.map((course) => (
-                <Link
-                  key={course.id}
-                  to={`/lesson/${course.slug}/${course.lessons[0]?.id}`}
-                  style={{ textDecoration: 'none' }}
-                >
-                  <div
-                    style={{
-                      background: '#0A1020',
-                      border: `1px solid ${course.color}40`,
-                      borderRadius: '8px',
-                      padding: '15px',
-                    }}
+                    style={
+                      styles.missionHeader
+                    }
                   >
-                    <div style={{ fontSize: '30px', marginBottom: '10px' }}>{course.icon}</div>
-                    <h3 style={{ color: course.color, fontWeight: 'bold', fontSize: '14px' }}>
-                      {course.name}
-                    </h3>
+                    <p
+                      style={
+                        styles.missionTitle
+                      }
+                    >
+                      {mission.title}
+                    </p>
+
+                    <span
+                      style={
+                        styles.missionXp
+                      }
+                    >
+                      +{mission.xpReward} XP
+                    </span>
+                  </div>
+
+                  <div
+                    style={
+                      styles.progressTrack
+                    }
+                  >
                     <div
                       style={{
-                        background: '#1F2937',
-                        borderRadius: '10px',
-                        height: '5px',
-                        overflow: 'hidden',
-                        marginTop: '10px',
+                        ...styles.progressFill,
+                        width: `${Math.min(
+                          percent,
+                          100
+                        )}%`,
+                        background:
+                          mission.completed
+                            ? 'linear-gradient(90deg, #00FF88, #10B981)'
+                            : 'linear-gradient(90deg, #00D4FF, #8B5CF6)',
                       }}
+                    />
+                  </div>
+
+                  <p
+                    style={
+                      styles.progressText
+                    }
+                  >
+                    {mission.progress}/
+                    {mission.target}
+                  </p>
+                </div>
+              );
+            })}
+        </section>
+
+        <section style={styles.card}>
+          <div style={styles.cardHeader}>
+            <h2 style={styles.sectionTitle}>
+              🏆 Conquistas
+            </h2>
+
+            <Link
+              to="/achievements"
+              style={{
+                ...styles.link,
+                color: '#FFD700',
+              }}
+            >
+              Ver todas →
+            </Link>
+          </div>
+
+          <div style={styles.achievementsGrid}>
+            {recentAchievements.map(
+              (achievement) => (
+                <div
+                  key={achievement.id}
+                  style={{
+                    ...styles.achievement,
+                    opacity:
+                      achievement.unlocked
+                        ? 1
+                        : 0.4,
+                  }}
+                >
+                  <div
+                    style={
+                      styles.achievementIcon
+                    }
+                  >
+                    {achievement.unlocked
+                      ? achievement.icon
+                      : '🔒'}
+                  </div>
+
+                  <p
+                    style={
+                      styles.achievementName
+                    }
+                  >
+                    {achievement.name}
+                  </p>
+                </div>
+              )
+            )}
+          </div>
+        </section>
+
+        <section
+          style={{
+            ...styles.card,
+            gridColumn: 'span 2',
+          }}
+        >
+          <div style={styles.cardHeader}>
+            <div>
+              <h2 style={styles.sectionTitle}>
+                📚 Cursos
+              </h2>
+
+              <p style={styles.cardHint}>
+                Cursos publicados pelos
+                professores.
+              </p>
+            </div>
+
+            <Link
+              to="/galaxy"
+              style={styles.link}
+            >
+              Ver galáxia →
+            </Link>
+          </div>
+
+          {coursesLoading ? (
+            <div style={styles.empty}>
+              Carregando cursos...
+            </div>
+          ) : coursesError ? (
+            <div style={styles.empty}>
+              <p>{coursesError}</p>
+
+              <button
+                type="button"
+                onClick={() =>
+                  window.location.reload()
+                }
+                style={
+                  styles.retryButton
+                }
+              >
+                Tentar novamente
+              </button>
+            </div>
+          ) : courses.length === 0 ? (
+            <div style={styles.empty}>
+              <div
+                style={
+                  styles.emptyIcon
+                }
+              >
+                🪐
+              </div>
+
+              <strong>
+                Nenhum curso publicado ainda
+              </strong>
+
+              <p style={styles.cardHint}>
+                Quando um professor publicar
+                um curso, ele aparecerá aqui.
+              </p>
+            </div>
+          ) : (
+            <div style={styles.coursesGrid}>
+              {coursesWithProgress
+                .slice(0, 6)
+                .map((course) => {
+                  const firstIncomplete =
+                    course.lessons.find(
+                      (lesson) =>
+                        !completedSet.has(
+                          lesson.id
+                        )
+                    );
+
+                  const targetLesson =
+                    firstIncomplete ||
+                    course.lessons[0];
+
+                  if (!targetLesson) {
+                    return null;
+                  }
+
+                  return (
+                    <Link
+                      key={course.id}
+                      to={`/lesson/${course.slug}/${targetLesson.id}`}
+                      style={
+                        styles.courseLink
+                      }
                     >
                       <div
                         style={{
-                          background: course.color,
-                          height: '100%',
-                          width: `${course.percent}%`,
+                          ...styles.courseCard,
+                          borderColor:
+                            `${course.color}40`,
                         }}
-                      />
-                    </div>
-                    <p style={{ fontSize: '11px', color: '#9CA3AF', marginTop: '5px' }}>
-                      {course.percent}% completo
-                    </p>
-                  </div>
-                </Link>
-              ))}
+                      >
+                        <div
+                          style={
+                            styles.courseIcon
+                          }
+                        >
+                          {course.icon}
+                        </div>
+
+                        <h3
+                          style={{
+                            ...styles.courseName,
+                            color:
+                              course.color,
+                          }}
+                        >
+                          {course.name}
+                        </h3>
+
+                        <p
+                          style={
+                            styles.courseDescription
+                          }
+                        >
+                          {course.description ||
+                            'Curso disponível para você.'}
+                        </p>
+
+                        <div
+                          style={
+                            styles.progressTrack
+                          }
+                        >
+                          <div
+                            style={{
+                              ...styles.progressFill,
+                              width: `${course.progress.percent}%`,
+                              background:
+                                course.color,
+                            }}
+                          />
+                        </div>
+
+                        <p
+                          style={
+                            styles.progressText
+                          }
+                        >
+                          {course.progress.completed}
+                          /
+                          {course.lessons.length}{' '}
+                          aulas •{' '}
+                          {course.progress.percent}
+                          %
+                        </p>
+                      </div>
+                    </Link>
+                  );
+                })}
             </div>
-          </div>
-        )}
+          )}
+
+          {coursesInProgress.length > 0 && (
+            <div
+              style={
+                styles.inProgressBlock
+              }
+            >
+              <h3
+                style={
+                  styles.subsectionTitle
+                }
+              >
+                🚀 Seus cursos em progresso
+              </h3>
+
+              <div style={styles.coursesGrid}>
+                {coursesInProgress.map(
+                  (course) => {
+                    const next =
+                      course.lessons.find(
+                        (lesson) =>
+                          !completedSet.has(
+                            lesson.id
+                          )
+                      ) ||
+                      course.lessons[0];
+
+                    if (!next) {
+                      return null;
+                    }
+
+                    return (
+                      <Link
+                        key={`progress-${course.id}`}
+                        to={`/lesson/${course.slug}/${next.id}`}
+                        style={
+                          styles.courseLink
+                        }
+                      >
+                        <div
+                          style={{
+                            ...styles.courseCard,
+                            borderColor:
+                              `${course.color}80`,
+                          }}
+                        >
+                          <div
+                            style={
+                              styles.courseRow
+                            }
+                          >
+                            <span
+                              style={
+                                styles.courseIconSmall
+                              }
+                            >
+                              {course.icon}
+                            </span>
+
+                            <strong
+                              style={{
+                                color:
+                                  course.color,
+                              }}
+                            >
+                              {course.name}
+                            </strong>
+                          </div>
+
+                          <div
+                            style={
+                              styles.progressTrack
+                            }
+                          >
+                            <div
+                              style={{
+                                ...styles.progressFill,
+                                width: `${course.progress.percent}%`,
+                                background:
+                                  course.color,
+                              }}
+                            />
+                          </div>
+
+                          <p
+                            style={
+                              styles.progressText
+                            }
+                          >
+                            {course.progress.percent}
+                            % completo
+                          </p>
+                        </div>
+                      </Link>
+                    );
+                  }
+                )}
+              </div>
+            </div>
+          )}
+        </section>
       </div>
     </div>
   );
 }
+
+function StatCard({
+  icon,
+  label,
+  value,
+  color,
+}: {
+  icon: string;
+  label: string;
+  value: number;
+  color: string;
+}) {
+  return (
+    <div
+      style={{
+        ...styles.statCard,
+        borderColor:
+          `${color}40`,
+        display: 'flex',
+        alignItems: 'center',
+        gap: '15px',
+      }}
+    >
+      <div style={styles.statBigIcon}>
+        {icon}
+      </div>
+
+      <div>
+        <p style={styles.statLabel}>
+          {label}
+        </p>
+
+        <p
+          style={{
+            ...styles.statValue,
+            color,
+          }}
+        >
+          {value.toLocaleString(
+            'pt-BR'
+          )}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+const styles: Record<
+  string,
+  React.CSSProperties
+> = {
+  page: {
+    padding: 20,
+    color: 'white',
+    fontFamily: 'sans-serif',
+    minHeight: '100vh',
+  },
+
+  center: {
+    minHeight: '60vh',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: 'white',
+  },
+
+  header: {
+    marginBottom: 30,
+  },
+
+  date: {
+    color: '#9CA3AF',
+    fontSize: 14,
+    margin: 0,
+  },
+
+  title: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    margin: '5px 0 0',
+  },
+
+  cyan: {
+    color: '#00D4FF',
+  },
+
+  subtitle: {
+    color: '#9CA3AF',
+    fontSize: 14,
+    marginTop: 5,
+  },
+
+  statsGrid: {
+    display: 'grid',
+    gridTemplateColumns:
+      'repeat(auto-fit, minmax(220px, 1fr))',
+    gap: 15,
+    marginBottom: 30,
+  },
+
+  statCard: {
+    background: '#111827',
+    border: '1px solid',
+    borderRadius: 10,
+    padding: 20,
+    minHeight: 80,
+  },
+
+  statIcon: {
+    fontSize: 24,
+  },
+
+  statBigIcon: {
+    fontSize: 40,
+  },
+
+  statLabel: {
+    color: '#9CA3AF',
+    fontSize: 12,
+    margin: 0,
+  },
+
+  statValue: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    margin: '2px 0 0',
+  },
+
+  progressTrack: {
+    background: '#1F2937',
+    borderRadius: 10,
+    height: 6,
+    overflow: 'hidden',
+  },
+
+  progressFill: {
+    height: '100%',
+    borderRadius: 10,
+  },
+
+  progressText: {
+    color: '#9CA3AF',
+    fontSize: 11,
+    margin: '5px 0 0',
+  },
+
+  continueCard: {
+    background: '#111827',
+    border: '2px solid',
+    borderRadius: 10,
+    padding: 25,
+    marginBottom: 20,
+  },
+
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    margin: 0,
+  },
+
+  continueContent: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 20,
+    flexWrap: 'wrap',
+    marginTop: 15,
+  },
+
+  courseIconLarge: {
+    fontSize: 50,
+  },
+
+  continueInfo: {
+    flex: 1,
+    minWidth: 200,
+  },
+
+  eyebrow: {
+    fontSize: 12,
+    textTransform: 'uppercase',
+    fontWeight: 'bold',
+    margin: 0,
+  },
+
+  lessonTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    margin: '5px 0 0',
+  },
+
+  description: {
+    color: '#9CA3AF',
+    fontSize: 13,
+    marginTop: 5,
+  },
+
+  primaryButton: {
+    padding: '12px 24px',
+    color: 'black',
+    borderRadius: 5,
+    textDecoration: 'none',
+    fontWeight: 'bold',
+  },
+
+  contentGrid: {
+    display: 'grid',
+    gridTemplateColumns:
+      'repeat(auto-fit, minmax(350px, 1fr))',
+    gap: 20,
+  },
+
+  card: {
+    background: '#111827',
+    border: '1px solid #1F2937',
+    borderRadius: 10,
+    padding: 25,
+  },
+
+  cardHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 15,
+    marginBottom: 15,
+  },
+
+  link: {
+    color: '#00D4FF',
+    fontSize: 12,
+    textDecoration: 'none',
+    whiteSpace: 'nowrap',
+  },
+
+  cardHint: {
+    color: '#9CA3AF',
+    fontSize: 12,
+    margin: '5px 0 0',
+  },
+
+  mission: {
+    padding: 12,
+    background: '#0A1020',
+    border: '1px solid',
+    borderRadius: 8,
+    marginBottom: 10,
+  },
+
+  missionHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 10,
+  },
+
+  missionTitle: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    margin: 0,
+  },
+
+  missionXp: {
+    color: '#FFD700',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+
+  achievementsGrid: {
+    display: 'grid',
+    gridTemplateColumns:
+      'repeat(4, minmax(0, 1fr))',
+    gap: 10,
+  },
+
+  achievement: {
+    textAlign: 'center',
+    padding: 10,
+    background: '#0A1020',
+    borderRadius: 8,
+  },
+
+  achievementIcon: {
+    fontSize: 30,
+  },
+
+  achievementName: {
+    fontSize: 10,
+    marginTop: 5,
+    color: '#9CA3AF',
+  },
+
+  coursesGrid: {
+    display: 'grid',
+    gridTemplateColumns:
+      'repeat(auto-fit, minmax(200px, 1fr))',
+    gap: 15,
+  },
+
+  courseLink: {
+    textDecoration: 'none',
+    color: 'inherit',
+  },
+
+  courseCard: {
+    background: '#0A1020',
+    border: '1px solid',
+    borderRadius: 8,
+    padding: 15,
+    height: '100%',
+    boxSizing: 'border-box',
+  },
+
+  courseIcon: {
+    fontSize: 30,
+    marginBottom: 10,
+  },
+
+  courseName: {
+    fontWeight: 'bold',
+    fontSize: 14,
+    margin: 0,
+  },
+
+  courseDescription: {
+    color: '#9CA3AF',
+    fontSize: 11,
+    lineHeight: 1.4,
+    minHeight: 32,
+  },
+
+  courseRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
+
+  courseIconSmall: {
+    fontSize: 28,
+  },
+
+  inProgressBlock: {
+    marginTop: 25,
+    paddingTop: 20,
+    borderTop: '1px solid #1F2937',
+  },
+
+  subsectionTitle: {
+    fontSize: 15,
+    margin: '0 0 15px',
+  },
+
+  empty: {
+    minHeight: 150,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    textAlign: 'center',
+    color: '#D1D5DB',
+    gap: 8,
+  },
+
+  emptyIcon: {
+    fontSize: 42,
+  },
+
+  retryButton: {
+    marginTop: 5,
+    border: '1px solid #00D4FF',
+    background: '#0A1020',
+    color: '#00D4FF',
+    borderRadius: 6,
+    padding: '8px 14px',
+    cursor: 'pointer',
+  },
+};
