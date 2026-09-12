@@ -3,6 +3,8 @@ import {
   useState,
 } from 'react';
 
+import { useNavigate } from 'react-router-dom';
+
 import type {
   CSSProperties,
   ReactNode,
@@ -98,6 +100,15 @@ const defaultSettings: SettingsData = {
   language: 'pt-BR',
 };
 
+export const CODEQUEST_SETTINGS_EVENT = 'codequest:settings-changed';
+export const CODEQUEST_SOUND_EVENT = 'codequest:sound';
+
+function emitSound(kind: 'click' | 'success') {
+  window.dispatchEvent(
+    new CustomEvent(CODEQUEST_SOUND_EVENT, { detail: { kind } })
+  );
+}
+
 function getSettingsKey(
   userId: string
 ) {
@@ -157,8 +168,10 @@ function loadSettings(
 }
 
 export function Settings() {
-  const { user } =
+  const { user, logout } =
     useAuthStore();
+
+  const navigate = useNavigate();
 
   const [
     activeSection,
@@ -289,6 +302,12 @@ export function Settings() {
             ),
             JSON.stringify(next)
           );
+
+          window.dispatchEvent(
+            new CustomEvent(CODEQUEST_SETTINGS_EVENT, {
+              detail: { userId: user.id, settings: next },
+            })
+          );
         } catch (error) {
           console.error(
             'Erro ao salvar configurações:',
@@ -401,7 +420,7 @@ export function Settings() {
       };
 
     loadCourses();
-  }, [selectedCourse]);
+  }, []);
 
   /*
    * Carrega as avaliações.
@@ -602,166 +621,296 @@ export function Settings() {
 
   const saveRating =
     async () => {
-      if (
-        !user?.id ||
-        !db ||
-        !selectedCourse
-      ) {
+      if (!user?.id || !selectedCourse) {
+        setRatingMessage(
+          'Você precisa estar conectado para avaliar.'
+        );
         return;
       }
 
-      if (
-        ratingValue < 1 ||
-        ratingValue > 5
-      ) {
+      if (ratingValue < 1 || ratingValue > 5) {
         setRatingMessage(
           'Escolha uma nota de 1 a 5 estrelas.'
         );
-
         return;
       }
-
-      /*
-       * Referência local depois
-       * da validação do db.
-       */
-      const firestore = db;
 
       setSavingRating(true);
       setRatingMessage('');
 
+      const cleanComment = ratingComment.trim();
+      const localKey = `codequest-ratings-${selectedCourse}`;
+
       try {
         /*
-         * Um documento por usuário.
-         *
-         * courses/{curso}/ratings/{seu UID}
+         * Primeiro tentamos enviar para o Firebase.
+         * O envio NÃO depende de conseguir ler a coleção depois.
+         * Isso evita que uma regra de leitura do Firestore transforme
+         * uma avaliação que foi gravada com sucesso em um erro falso.
          */
-        const ratingRef =
-          doc(
-            firestore,
-            'courses',
-            selectedCourse,
-            'ratings',
-            user.id
-          );
-
-        await setDoc(
-          ratingRef,
-          {
-            userId:
-              user.id,
-
-            username:
-              user.username,
-
-            rating:
-              ratingValue,
-
-            comment:
-              ratingComment.trim(),
-
-            updatedAt:
-              serverTimestamp(),
-          },
-          {
-            merge: true,
-          }
-        );
-
-        setRatings(
-          (previous) => ({
-            ...previous,
-
-            [selectedCourse]: {
-              rating:
-                ratingValue,
-
-              comment:
-                ratingComment.trim(),
-            },
-          })
-        );
-
-        setRatingMessage(
-          '⭐ Avaliação salva com sucesso!'
-        );
-
-        /*
-         * Atualiza a média do curso.
-         */
-        const ratingsSnapshot =
-          await getDocs(
-            collection(
-              firestore,
+        if (db) {
+          await setDoc(
+            doc(
+              db,
               'courses',
               selectedCourse,
-              'ratings'
-            )
+              'ratings',
+              user.id
+            ),
+            {
+              userId: user.id,
+              username: user.username ?? 'Aluno',
+              rating: ratingValue,
+              comment: cleanComment,
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
           );
+        }
 
-        const values =
-          ratingsSnapshot.docs
-            .map(
-              (
-                ratingDoc
-              ) =>
-                ratingDoc.data()
-                  .rating
-            )
-            .filter(
-              (
-                value
-              ): value is number =>
-                typeof value ===
-                  'number' &&
-                value >= 1 &&
-                value <= 5
+        /*
+         * Mantém uma cópia local para funcionar mesmo quando o Firebase
+         * estiver indisponível e também para exibir a avaliação imediatamente.
+         */
+        let localRatings: Record<string, UserRating> = {};
+
+        try {
+          const stored = localStorage.getItem(localKey);
+          localRatings = stored
+            ? JSON.parse(stored)
+            : {};
+        } catch {
+          localRatings = {};
+        }
+
+        localRatings[user.id] = {
+          rating: ratingValue,
+          comment: cleanComment,
+        };
+
+        localStorage.setItem(
+          localKey,
+          JSON.stringify(localRatings)
+        );
+
+        setRatings((previous) => ({
+          ...previous,
+          [selectedCourse]: {
+            rating: ratingValue,
+            comment: cleanComment,
+          },
+        }));
+
+        /*
+         * Atualiza a média na tela sem fazer uma nova leitura do Firestore.
+         * Assim, uma permissão de leitura não bloqueia o envio da avaliação.
+         */
+        const previousSummary =
+          ratingSummaries[selectedCourse];
+
+        const previousRating =
+          ratings[selectedCourse]?.rating;
+
+        let nextAverage = ratingValue;
+        let nextCount = 1;
+
+        if (previousSummary && previousSummary.count > 0) {
+          if (
+            typeof previousRating === 'number' &&
+            previousRating >= 1 &&
+            previousRating <= 5
+          ) {
+            const nextTotal =
+              previousSummary.average *
+                previousSummary.count -
+              previousRating +
+              ratingValue;
+
+            nextCount = previousSummary.count;
+            nextAverage =
+              nextTotal / nextCount;
+          } else {
+            const nextTotal =
+              previousSummary.average *
+                previousSummary.count +
+              ratingValue;
+
+            nextCount = previousSummary.count + 1;
+            nextAverage =
+              nextTotal / nextCount;
+          }
+        }
+
+        setRatingSummaries((previous) => ({
+          ...previous,
+          [selectedCourse]: {
+            average: Number(
+              nextAverage.toFixed(1)
+            ),
+            count: nextCount,
+          },
+        }));
+
+        /*
+         * Também grava o resumo no documento principal do curso.
+         * É esse documento que o painel do professor e o painel do admin
+         * usam para mostrar média e quantidade de avaliações.
+         *
+         * Tentamos recalcular com todas as avaliações para manter o número
+         * correto. Se a leitura for recusada pelas regras, a avaliação
+         * individual já foi salva acima e não transformamos isso em erro.
+         */
+        if (db) {
+          try {
+            const ratingsSnapshot = await getDocs(
+              collection(
+                db,
+                'courses',
+                selectedCourse,
+                'ratings'
+              )
             );
 
-        const total =
-          values.reduce(
-            (
-              sum,
-              value
-            ) =>
-              sum + value,
-            0
-          );
+            const validRatings = ratingsSnapshot.docs
+              .map((ratingDoc) => ratingDoc.data().rating)
+              .filter(
+                (value): value is number =>
+                  typeof value === 'number' &&
+                  value >= 1 &&
+                  value <= 5
+              );
 
-        setRatingSummaries(
-          (previous) => ({
-            ...previous,
-
-            [selectedCourse]: {
-              average:
-                values.length >
+            if (validRatings.length > 0) {
+              const totalRatings = validRatings.reduce(
+                (sum, value) => sum + value,
                 0
-                  ? Number(
-                      (
-                        total /
-                        values.length
-                      ).toFixed(1)
-                    )
-                  : 0,
+              );
 
-              count:
-                values.length,
-            },
-          })
+              await setDoc(
+                doc(db, 'courses', selectedCourse),
+                {
+                  averageRating: Number(
+                    (totalRatings / validRatings.length).toFixed(1)
+                  ),
+                  ratingsCount: validRatings.length,
+                  updatedAt: serverTimestamp(),
+                },
+                { merge: true }
+              );
+            }
+          } catch (summaryError) {
+            console.warn(
+              'A avaliação foi salva, mas o resumo do curso não pôde ser atualizado:',
+              summaryError
+            );
+          }
+        }
+
+        setRatingMessage(
+          db
+            ? '⭐ Avaliação enviada com sucesso!'
+            : '⭐ Avaliação salva neste dispositivo.'
         );
+
+        emitSound('success');
       } catch (error) {
         console.error(
-          'Erro ao salvar avaliação:',
+          'Erro ao enviar avaliação para o Firebase:',
           error
         );
 
-        setRatingMessage(
-          'Não foi possível salvar a avaliação.'
-        );
+        /*
+         * Se o Firebase recusar a gravação, ainda guardamos a avaliação
+         * neste dispositivo. O usuário não perde o que acabou de preencher.
+         */
+        try {
+          let localRatings: Record<string, UserRating> = {};
+
+          try {
+            const stored =
+              localStorage.getItem(localKey);
+            localRatings = stored
+              ? JSON.parse(stored)
+              : {};
+          } catch {
+            localRatings = {};
+          }
+
+          localRatings[user.id] = {
+            rating: ratingValue,
+            comment: cleanComment,
+          };
+
+          localStorage.setItem(
+            localKey,
+            JSON.stringify(localRatings)
+          );
+
+          setRatings((previous) => ({
+            ...previous,
+            [selectedCourse]: {
+              rating: ratingValue,
+              comment: cleanComment,
+            },
+          }));
+
+          setRatingMessage(
+            '⚠️ O Firebase recusou o envio. A avaliação foi salva neste dispositivo.'
+          );
+        } catch (localError) {
+          console.error(
+            'Erro ao salvar avaliação localmente:',
+            localError
+          );
+
+          setRatingMessage(
+            '❌ Não foi possível salvar a avaliação. Abra o console para ver o erro.'
+          );
+        }
       } finally {
         setSavingRating(false);
       }
     };
+
+  useEffect(() => {
+    if (!user?.id) return;
+    window.dispatchEvent(
+      new CustomEvent(CODEQUEST_SETTINGS_EVENT, {
+        detail: { userId: user.id, settings },
+      })
+    );
+  }, [user?.id, settings]);
+
+  /*
+   * Sai da conta com confirmação.
+   * Também encerra a sessão do Firebase quando existir.
+   */
+  const handleLogout = async () => {
+    const confirmed = window.confirm(
+      'Tem certeza que deseja sair da sua conta?'
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const { auth } = await import('@/lib/firebase');
+      const { signOut } = await import('firebase/auth');
+
+      if (auth) {
+        await signOut(auth);
+      }
+    } catch (error) {
+      console.error(
+        'Erro ao encerrar sessão do Firebase:',
+        error
+      );
+    } finally {
+      logout();
+      navigate('/', { replace: true });
+    }
+  };
 
   if (!user) {
     return (
@@ -1014,6 +1163,7 @@ export function Settings() {
               'account' && (
               <AccountSection
                 user={user}
+                onLogout={handleLogout}
               />
             )}
           </main>
@@ -1460,6 +1610,14 @@ function SoundSection({
           }
         />
       </SettingRow>
+      <button
+        type="button"
+        onClick={() => emitSound('click')}
+        style={{ ...styles.saveButton, marginTop: 18 }}
+      >
+        🔊 Testar som
+      </button>
+
     </div>
   );
 }
@@ -1887,12 +2045,14 @@ function RatingsSection({
 
 function AccountSection({
   user,
+  onLogout,
 }: {
   user: {
     username: string;
     email: string;
     id: string;
   };
+  onLogout: () => void | Promise<void>;
 }) {
   return (
     <div
@@ -1909,6 +2069,7 @@ function AccountSection({
           styles.accountBox
         }
       >
+
         <div>
           <span
             style={
@@ -1955,6 +2116,14 @@ function AccountSection({
           </span>
         </div>
       </div>
+
+      <button
+        type="button"
+        onClick={onLogout}
+        style={styles.logoutButton}
+      >
+        🚪 Sair da conta
+      </button>
     </div>
   );
 }
@@ -2379,5 +2548,18 @@ const styles: Record<
     fontSize: 12,
     wordBreak:
       'break-all',
+  },
+
+  logoutButton: {
+    width: '100%',
+    marginTop: 18,
+    border: '1px solid #7F1D1D',
+    borderRadius: 10,
+    padding: '12px 16px',
+    background: '#2A1014',
+    color: '#FCA5A5',
+    cursor: 'pointer',
+    fontWeight: 'bold',
+    fontSize: 14,
   },
 };

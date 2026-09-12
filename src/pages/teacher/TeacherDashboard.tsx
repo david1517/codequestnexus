@@ -1,7 +1,6 @@
-  import React, {
+import React, {
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from 'react';
 
@@ -981,7 +980,10 @@ export function TeacherDashboard() {
       return;
     }
 
-    if (lesson.type !== 'pdf') {
+    if (
+      lesson.type !== 'pdf' &&
+      lesson.type !== 'word'
+    ) {
       alert(
         'Para vídeos, use um link externo do YouTube, Vimeo ou outra plataforma.'
       );
@@ -992,11 +994,21 @@ export function TeacherDashboard() {
     const isPdf =
       file.type === 'application/pdf' ||
       lowerFileName.endsWith('.pdf');
+    const isWord =
+      file.type === 'application/msword' ||
+      file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+      lowerFileName.endsWith('.doc') ||
+      lowerFileName.endsWith('.docx');
+
     if (lesson.type === 'pdf' && !isPdf) {
       alert('Envie somente arquivos PDF.');
       return;
     }
 
+    if (lesson.type === 'word' && !isWord) {
+      alert('Envie somente arquivos Word (.doc ou .docx).');
+      return;
+    }
 
     if (
       file.size >
@@ -1074,7 +1086,11 @@ export function TeacherDashboard() {
             dataUrl,
           fileSize:
             file.size,
-          fileType: 'application/pdf',
+          fileType:
+            isPdf
+              ? 'application/pdf'
+              : file.type ||
+                'application/msword',
           uploadedAt:
             new Date().toISOString(),
         };
@@ -1119,14 +1135,20 @@ export function TeacherDashboard() {
         }
       );
 
-      alert('PDF anexado com sucesso!');
+      alert(
+        lesson.type === 'word'
+          ? 'Arquivo Word anexado com sucesso!'
+          : 'PDF anexado com sucesso!'
+      );
     } catch (error) {
       console.error(
         'Erro ao anexar PDF:',
         error
       );
 
-      alert('Não foi possível anexar o PDF.');
+      alert(
+        'Não foi possível anexar o PDF.'
+      );
     }
   }
 
@@ -2679,34 +2701,30 @@ function LessonEditor({
           Conteúdo da aula
         </label>
 
-        {lesson.type === 'word' ? (
-          <RichTextEditor
-            value={lesson.content}
-            onChange={(content) =>
-              onUpdate({ content })
-            }
-          />
-        ) : (
-          <textarea
-            style={{
-              ...styles.textarea,
-              minHeight: 180,
-            }}
-            value={lesson.content}
-            onChange={(event) =>
-              onUpdate({
-                content: event.target.value,
-              })
-            }
-            placeholder={
-              lesson.type === 'video'
-                ? 'Cole aqui informações ou instruções sobre o vídeo...'
-                : 'Digite o conteúdo da aula...'
-            }
-          />
-        )}
+        <textarea
+          style={{
+            ...styles.textarea,
+            minHeight: 180,
+          }}
+          value={
+            lesson.content
+          }
+          onChange={(event) =>
+            onUpdate({
+              content:
+                event.target
+                  .value,
+            })
+          }
+          placeholder={
+            lesson.type ===
+            'video'
+              ? 'Cole aqui informações ou instruções sobre o vídeo...'
+              : 'Digite o conteúdo da aula...'
+          }
+        />
 
-        {lesson.type === 'pdf' && (
+        {(lesson.type === 'pdf' || lesson.type === 'word') && (
           <div
             style={
               styles.materialBox
@@ -2718,7 +2736,7 @@ function LessonEditor({
                   styles.materialTitle
                 }
               >
-                📄 Material PDF
+                {lesson.type === 'word' ? '📝 Material Word' : '📄 Material PDF'}
               </strong>
 
               <p
@@ -2726,7 +2744,12 @@ function LessonEditor({
                   styles.mutedText
                 }
               >
-                Neste modo sem Firebase Storage, PDFs pequenos ficam armazenados diretamente no Firestore.
+                Neste modo sem
+                Firebase Storage,
+                PDFs pequenos ficam
+                armazenados
+                diretamente no
+                Firestore.
               </p>
 
               <p
@@ -2814,11 +2837,11 @@ function LessonEditor({
               >
                 {uploading
                   ? '⏳ Enviando...'
-                  : '📎 Anexar PDF'}
+                  : '📎 Anexar PDF/Word'}
 
                 <input
                   type="file"
-                  accept=".pdf,application/pdf"
+                  accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                   onChange={
                     handleFileChange
                   }
@@ -3000,192 +3023,6 @@ function LessonEditor({
               : '🗑️ Excluir aula'}
           </button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-
-interface RichTextEditorProps {
-  value: string;
-  onChange: (value: string) => void;
-}
-
-function RichTextEditor({
-  value,
-  onChange,
-}: RichTextEditorProps) {
-  const editorRef = useRef<HTMLDivElement | null>(null);
-  const [fontFamily, setFontFamily] = useState('Arial');
-  const [fontSize, setFontSize] = useState('16');
-
-  useEffect(() => {
-    const editor = editorRef.current;
-    if (!editor) return;
-
-    if (document.activeElement !== editor && editor.innerHTML !== value) {
-      editor.innerHTML = value || '<p><br></p>';
-    }
-  }, [value]);
-
-  function emitChange() {
-    const editor = editorRef.current;
-    if (!editor) return;
-    onChange(editor.innerHTML);
-  }
-
-  function focusEditor() {
-    editorRef.current?.focus();
-  }
-
-  function command(command: string, commandValue?: string) {
-    focusEditor();
-    document.execCommand(command, false, commandValue);
-    emitChange();
-  }
-
-  function normalizeFonts() {
-    const editor = editorRef.current;
-    if (!editor) return;
-
-    editor.querySelectorAll('font[face]').forEach((font) => {
-      const face = font.getAttribute('face');
-      if (!face) return;
-
-      const span = document.createElement('span');
-      span.style.fontFamily = face;
-
-      while (font.firstChild) {
-        span.appendChild(font.firstChild);
-      }
-
-      font.replaceWith(span);
-    });
-  }
-
-  function setFont(value: string) {
-    setFontFamily(value);
-    focusEditor();
-    document.execCommand('fontName', false, value);
-    normalizeFonts();
-    emitChange();
-  }
-
-  function setSize(value: string) {
-    setFontSize(value);
-    focusEditor();
-    document.execCommand('fontSize', false, '7');
-
-    const editor = editorRef.current;
-    if (!editor) return;
-
-    editor.querySelectorAll('font[size="7"]').forEach((font) => {
-      const span = document.createElement('span');
-      span.style.fontSize = `${value}px`;
-
-      while (font.firstChild) {
-        span.appendChild(font.firstChild);
-      }
-
-      font.replaceWith(span);
-    });
-
-    emitChange();
-  }
-
-  function insertLink() {
-    const url = window.prompt('Cole o endereço do link:');
-    if (!url?.trim()) return;
-
-    const safeUrl = /^(https?:\/\/|mailto:)/i.test(url.trim())
-      ? url.trim()
-      : `https://${url.trim()}`;
-
-    command('createLink', safeUrl);
-  }
-
-  function handlePaste(event: React.ClipboardEvent<HTMLDivElement>) {
-    event.preventDefault();
-    const text = event.clipboardData.getData('text/plain');
-    document.execCommand('insertText', false, text);
-    emitChange();
-  }
-
-  return (
-    <div style={styles.richEditorShell}>
-      <div style={styles.richToolbar}>
-        <select
-          value={fontFamily}
-          onChange={(event) => setFont(event.target.value)}
-          style={styles.richSelect}
-          title="Fonte"
-        >
-          <option value="Arial">Arial</option>
-          <option value="Verdana">Verdana</option>
-          <option value="Tahoma">Tahoma</option>
-          <option value="Georgia">Georgia</option>
-          <option value="Times New Roman">Times New Roman</option>
-          <option value="Courier New">Courier New</option>
-        </select>
-
-        <select
-          value={fontSize}
-          onChange={(event) => setSize(event.target.value)}
-          style={styles.richSelect}
-          title="Tamanho"
-        >
-          {[8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48].map((size) => (
-            <option key={size} value={size}>
-              {size}px
-            </option>
-          ))}
-        </select>
-
-        <button type="button" style={styles.richToolButton} onMouseDown={(e) => e.preventDefault()} onClick={() => command('bold')} title="Negrito">
-          <strong>B</strong>
-        </button>
-        <button type="button" style={styles.richToolButton} onMouseDown={(e) => e.preventDefault()} onClick={() => command('italic')} title="Itálico">
-          <em>I</em>
-        </button>
-        <button type="button" style={styles.richToolButton} onMouseDown={(e) => e.preventDefault()} onClick={() => command('underline')} title="Sublinhado">
-          <u>U</u>
-        </button>
-        <button type="button" style={styles.richToolButton} onMouseDown={(e) => e.preventDefault()} onClick={() => command('strikeThrough')} title="Tachado">
-          <s>S</s>
-        </button>
-
-        <span style={styles.richDivider} />
-
-        <button type="button" style={styles.richToolButton} onMouseDown={(e) => e.preventDefault()} onClick={() => command('justifyLeft')} title="Alinhar à esquerda">☰</button>
-        <button type="button" style={styles.richToolButton} onMouseDown={(e) => e.preventDefault()} onClick={() => command('justifyCenter')} title="Centralizar">≡</button>
-        <button type="button" style={styles.richToolButton} onMouseDown={(e) => e.preventDefault()} onClick={() => command('justifyRight')} title="Alinhar à direita">☷</button>
-        <button type="button" style={styles.richToolButton} onMouseDown={(e) => e.preventDefault()} onClick={() => command('justifyFull')} title="Justificar">▤</button>
-
-        <span style={styles.richDivider} />
-
-        <button type="button" style={styles.richToolButton} onMouseDown={(e) => e.preventDefault()} onClick={() => command('insertUnorderedList')} title="Lista com marcadores">• List</button>
-        <button type="button" style={styles.richToolButton} onMouseDown={(e) => e.preventDefault()} onClick={() => command('insertOrderedList')} title="Lista numerada">1. List</button>
-        <button type="button" style={styles.richToolButton} onMouseDown={(e) => e.preventDefault()} onClick={insertLink} title="Inserir link">🔗</button>
-
-        <span style={styles.richDivider} />
-
-        <button type="button" style={styles.richToolButton} onMouseDown={(e) => e.preventDefault()} onClick={() => command('undo')} title="Desfazer">↶</button>
-        <button type="button" style={styles.richToolButton} onMouseDown={(e) => e.preventDefault()} onClick={() => command('redo')} title="Refazer">↷</button>
-        <button type="button" style={styles.richToolButton} onMouseDown={(e) => e.preventDefault()} onClick={() => command('removeFormat')} title="Limpar formatação">Tx</button>
-      </div>
-
-      <div
-        ref={editorRef}
-        contentEditable
-        suppressContentEditableWarning
-        onInput={emitChange}
-        onPaste={handlePaste}
-        style={styles.richEditorPage}
-        data-placeholder="Escreva sua aula aqui..."
-      />
-
-      <div style={styles.richEditorHint}>
-        Mini Word: fonte, tamanho, negrito, itálico, sublinhado, alinhamento, listas, links, desfazer e refazer. O conteúdo é salvo no Firestore como HTML.
       </div>
     </div>
   );
@@ -3826,68 +3663,4 @@ const styles: Record<
     fontSize: 13,
     lineHeight: 1.5,
   },
-  richEditorShell: {
-    border: '1px solid rgba(255,255,255,0.12)',
-    borderRadius: 14,
-    overflow: 'hidden',
-    background: '#E5E7EB',
-  },
-
-  richToolbar: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    flexWrap: 'wrap',
-    padding: 10,
-    background: '#111827',
-    borderBottom: '1px solid rgba(255,255,255,0.12)',
-  },
-
-  richSelect: {
-    minHeight: 36,
-    borderRadius: 8,
-    border: '1px solid rgba(255,255,255,0.14)',
-    background: '#0D1422',
-    color: '#FFFFFF',
-    padding: '0 9px',
-    cursor: 'pointer',
-  },
-
-  richToolButton: {
-    minWidth: 36,
-    minHeight: 36,
-    padding: '0 9px',
-    borderRadius: 8,
-    border: '1px solid rgba(255,255,255,0.14)',
-    background: '#0D1422',
-    color: '#FFFFFF',
-    cursor: 'pointer',
-    fontWeight: 700,
-  },
-
-  richDivider: {
-    width: 1,
-    height: 28,
-    background: 'rgba(255,255,255,0.16)',
-    margin: '0 2px',
-  },
-
-  richEditorPage: {
-    minHeight: 420,
-    padding: 32,
-    background: '#FFFFFF',
-    color: '#111827',
-    fontFamily: 'Arial, sans-serif',
-    fontSize: 16,
-    lineHeight: 1.7,
-    outline: 'none',
-  },
-
-  richEditorHint: {
-    padding: '10px 14px',
-    background: '#F3F4F6',
-    color: '#4B5563',
-    fontSize: 12,
-  },
-
 };
