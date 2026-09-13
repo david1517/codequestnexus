@@ -1,5 +1,14 @@
 import { NavLink } from 'react-router-dom';
-import { Home, Globe, Target, Award, User, Settings, Zap } from 'lucide-react';
+import {
+  Home,
+  Globe,
+  Target,
+  Award,
+  User,
+  Settings,
+  MessageCircle,
+  Zap,
+} from 'lucide-react';
 import { useAuthStore } from '@/stores/useAuthStore';
 
 export function Sidebar() {
@@ -12,6 +21,7 @@ export function Sidebar() {
     { to: '/achievements', icon: Award, label: 'Conquistas' },
     { to: '/profile', icon: User, label: 'Perfil' },
     { to: '/settings', icon: Settings, label: 'Ajustes' },
+    { to: '/feedback', icon: MessageCircle, label: 'Feedback' },
   ];
 
   return (
@@ -28,6 +38,7 @@ export function Sidebar() {
         color: 'white',
         fontFamily: 'sans-serif',
         zIndex: 50,
+        boxSizing: 'border-box',
       }}
       className="sidebar"
     >
@@ -103,6 +114,7 @@ export function Sidebar() {
             style={{
               fontSize: '13px',
               fontWeight: 'bold',
+              margin: '0 0 5px',
             }}
           >
             {user.username}
@@ -112,6 +124,7 @@ export function Sidebar() {
             style={{
               fontSize: '11px',
               color: '#9CA3AF',
+              margin: 0,
             }}
           >
             Nivel {user.level}

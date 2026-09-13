@@ -24,6 +24,7 @@ import { Achievements } from '@/pages/Achievements/Achievements';
 import { Lesson } from '@/pages/Lesson/Lesson';
 import { Profile } from '@/pages/Profile/Profile';
 import { Settings } from '@/pages/Settings/Settings';
+import { Feedback } from "@/components/layout/Feedback";
 
 import { TeacherDashboard } from '@/pages/teacher/TeacherDashboard';
 import { AdminDashboard } from '@/pages/admin/AdminDashboard';
@@ -41,6 +42,7 @@ const PT_TO_EN: Record<string, string> = {
   'Ajustes': 'Settings',
   'Ranking': 'Leaderboard',
   'Em construção': 'Under construction',
+  'Feedback': 'Feedback',
 
   'Aparência': 'Appearance',
   'Notificações': 'Notifications',
@@ -70,6 +72,7 @@ const PT_TO_EN: Record<string, string> = {
   'Enviar avaliação': 'Submit rating',
   'Atualizar avaliação': 'Update rating',
   'Testar som': 'Test sound',
+  'Enviar feedback': 'Submit feedback',
 
   'Usuário': 'User',
   'E-mail': 'Email',
@@ -1032,6 +1035,11 @@ function App() {
           <Route
             path="/settings"
             element={<Settings />}
+          />
+
+          <Route
+            path="/feedback"
+            element={<Feedback />}
           />
         </Route>
 
